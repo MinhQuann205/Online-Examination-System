@@ -1,0 +1,10 @@
+.agents/
+.claude/
+.windsurf/
+backend/
+node_modules/
+apps/api/src/generated/
+apps/api/dist/
+apps/web/.next/
+packages/shared/dist/
+pnpm-lock.yaml

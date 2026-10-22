@@ -1,0 +1,21 @@
+{
+  "name": "online-examination-system",
+  "private": true,
+  "packageManager": "pnpm@10.18.3",
+  "scripts": {
+    "dev": "corepack pnpm --parallel --filter @exam/api --filter @exam/web dev",
+    "build": "corepack pnpm --filter @exam/shared build && corepack pnpm --filter @exam/api build && corepack pnpm --filter @exam/web build",
+    "typecheck": "corepack pnpm --filter @exam/shared build && corepack pnpm --filter @exam/api typecheck && corepack pnpm --filter @exam/web typecheck",
+    "lint": "corepack pnpm --recursive lint",
+    "test": "corepack pnpm --filter @exam/shared build && corepack pnpm --filter @exam/api test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:generate": "corepack pnpm --filter @exam/api db:generate",
+    "db:migrate": "corepack pnpm --filter @exam/api db:migrate",
+    "db:seed": "corepack pnpm --filter @exam/api db:seed"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.3"
+  }
+}

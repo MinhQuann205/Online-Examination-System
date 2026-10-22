@@ -1,0 +1,222 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  TEACHER
+  STUDENT
+}
+
+enum QuestionType {
+  SINGLE_CHOICE
+  MULTIPLE_CHOICE
+  MATCHING
+}
+
+enum ExamStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+  EXPIRED
+}
+
+model User {
+  id               String           @id @default(uuid()) @db.Uuid
+  email            String           @unique @db.VarChar(255)
+  fullName         String           @db.VarChar(150)
+  passwordHash     String
+  role             Role
+  isActive         Boolean          @default(true)
+  refreshTokenHash String?
+  tokenVersion     Int              @default(0)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  taughtClasses    Class[]          @relation("ClassTeacher")
+  memberships      ClassMember[]
+  questions        Question[]       @relation("QuestionAuthor")
+  exams            Exam[]           @relation("ExamAuthor")
+  assignments      ExamAssignment[] @relation("AssignmentStudent")
+  assignedExams    ExamAssignment[] @relation("AssignmentCreator")
+  attempts         ExamAttempt[]
+
+  @@index([role, isActive])
+}
+
+model Class {
+  id          String           @id @default(uuid()) @db.Uuid
+  name        String           @db.VarChar(150)
+  code        String           @unique @db.VarChar(40)
+  description String?
+  teacherId   String           @db.Uuid
+  teacher     User             @relation("ClassTeacher", fields: [teacherId], references: [id])
+  members     ClassMember[]
+  assignments ExamAssignment[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([teacherId])
+}
+
+model ClassMember {
+  id        String   @id @default(uuid()) @db.Uuid
+  classId   String   @db.Uuid
+  studentId String   @db.Uuid
+  class     Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  joinedAt  DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([classId, studentId])
+  @@index([studentId])
+}
+
+model Question {
+  id            String         @id @default(uuid()) @db.Uuid
+  authorId      String         @db.Uuid
+  author        User           @relation("QuestionAuthor", fields: [authorId], references: [id])
+  type          QuestionType
+  content       String
+  explanation   String?
+  options       QuestionOption[]
+  matchingPairs MatchingPair[]
+  examQuestions ExamQuestion[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([authorId, type])
+}
+
+model QuestionOption {
+  id         String   @id @default(uuid()) @db.Uuid
+  questionId String   @db.Uuid
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  content    String
+  isCorrect  Boolean  @default(false)
+  position   Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([questionId, position])
+  @@index([questionId, isCorrect])
+}
+
+model MatchingPair {
+  id         String   @id @default(uuid()) @db.Uuid
+  questionId String   @db.Uuid
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  leftText   String
+  rightText  String
+  position   Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([questionId, position])
+}
+
+model Exam {
+  id          String           @id @default(uuid()) @db.Uuid
+  authorId    String           @db.Uuid
+  author      User             @relation("ExamAuthor", fields: [authorId], references: [id])
+  title       String           @db.VarChar(200)
+  description String?
+  durationMin Int
+  status      ExamStatus       @default(DRAFT)
+  version     Int              @default(1)
+  questions   ExamQuestion[]
+  assignments ExamAssignment[]
+  attempts    ExamAttempt[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([authorId, status])
+}
+
+model ExamQuestion {
+  id               String        @id @default(uuid()) @db.Uuid
+  examId           String        @db.Uuid
+  questionId       String        @db.Uuid
+  exam             Exam          @relation(fields: [examId], references: [id], onDelete: Cascade)
+  question         Question      @relation(fields: [questionId], references: [id])
+  version          Int
+  position         Int
+  points           Decimal       @db.Decimal(8, 2)
+  questionSnapshot Json
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@unique([examId, version, position])
+  @@unique([examId, version, questionId])
+  @@index([questionId])
+}
+
+model ExamAssignment {
+  id         String        @id @default(uuid()) @db.Uuid
+  examId     String        @db.Uuid
+  exam       Exam          @relation(fields: [examId], references: [id])
+  classId    String?       @db.Uuid
+  class      Class?        @relation(fields: [classId], references: [id])
+  studentId  String?       @db.Uuid
+  student    User?         @relation("AssignmentStudent", fields: [studentId], references: [id])
+  createdById String       @db.Uuid
+  createdBy  User          @relation("AssignmentCreator", fields: [createdById], references: [id])
+  opensAt    DateTime?
+  closesAt   DateTime?
+  maxAttempts Int          @default(1)
+  attempts   ExamAttempt[]
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  @@index([examId])
+  @@index([classId, opensAt])
+  @@index([studentId, opensAt])
+}
+
+model ExamAttempt {
+  id                String         @id @default(uuid()) @db.Uuid
+  examId            String         @db.Uuid
+  exam              Exam           @relation(fields: [examId], references: [id])
+  assignmentId      String         @db.Uuid
+  assignment        ExamAssignment @relation(fields: [assignmentId], references: [id])
+  studentId         String         @db.Uuid
+  student           User           @relation(fields: [studentId], references: [id])
+  examVersion       Int
+  examSnapshot      Json
+  status            AttemptStatus  @default(IN_PROGRESS)
+  startedAt         DateTime       @default(now())
+  submittedAt       DateTime?
+  score             Decimal?       @db.Decimal(8, 2)
+  maxScore          Decimal?       @db.Decimal(8, 2)
+  answers           AttemptAnswer[]
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  @@index([studentId, startedAt])
+  @@index([examId, status])
+  @@index([assignmentId, studentId])
+}
+
+model AttemptAnswer {
+  id          String      @id @default(uuid()) @db.Uuid
+  attemptId   String      @db.Uuid
+  attempt     ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId  String      @db.Uuid
+  answer      Json
+  awarded     Decimal?    @db.Decimal(8, 2)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@unique([attemptId, questionId])
+}
