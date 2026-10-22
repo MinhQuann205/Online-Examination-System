@@ -94,6 +94,46 @@ export function DashboardShell({ initialUser }: { initialUser: CurrentUser }) {
           >
             <LayoutDashboard size={18} /> Tổng quan
           </a>
+          {user.role === 'ADMIN' && (
+            <a
+              className="mt-1 block rounded-lg px-3 py-3 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+              href="/admin/users"
+            >
+              Người dùng
+            </a>
+          )}
+          {user.role === 'ADMIN' && (
+            <a
+              className="mt-1 block rounded-lg px-3 py-3 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+              href="/admin/classes"
+            >
+              Lớp học
+            </a>
+          )}
+          {user.role === 'TEACHER' && (
+            <>
+              <a
+                className="mt-1 block rounded-lg px-3 py-3 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+                href="/teacher/classes"
+              >
+                Lớp học
+              </a>
+              <a
+                className="mt-1 block rounded-lg px-3 py-3 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+                href="/teacher/questions"
+              >
+                Ngân hàng câu hỏi
+              </a>
+            </>
+          )}
+          {user.role === 'STUDENT' && (
+            <a
+              className="mt-1 block rounded-lg px-3 py-3 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+              href="/student/classes"
+            >
+              Lớp học
+            </a>
+          )}
         </nav>
         <div className="absolute bottom-5 left-5 right-5 border-t border-slate-200 pt-5 dark:border-slate-800">
           <p className="truncate text-sm font-semibold">{user.fullName}</p>

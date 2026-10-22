@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import type { CurrentUser } from '@exam/shared';
 
 const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
@@ -48,4 +49,54 @@ export const api = {
   dashboard: (role: Lowercase<CurrentUser['role']>) =>
     request<{ user: CurrentUser; section: string }>(`/dashboard/${role}`),
   logout: () => request<void>('/auth/logout', { method: 'POST' }, false),
+  users: (params: string) =>
+    request<{
+      items: Array<Record<string, unknown>>;
+      total: number;
+      pageCount: number;
+    }>(`/users?${params}`),
+  createUser: (body: unknown) =>
+    request<Record<string, unknown>>('/users', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  setUserStatus: (id: string, isActive: boolean) =>
+    request(`/users/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ isActive }),
+    }),
+  resetUserPassword: (id: string) =>
+    request<{ temporaryPassword: string }>(`/users/${id}/reset-password`, {
+      method: 'POST',
+    }),
+  classes: () => request<{ items: Array<Record<string, any>> }>('/classes'),
+  createClass: (body: unknown) =>
+    request('/classes', { method: 'POST', body: JSON.stringify(body) }),
+  classDetail: (id: string) => request<Record<string, any>>(`/classes/${id}`),
+  updateClass: (id: string, body: unknown) =>
+    request(`/classes/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  addStudent: (id: string, studentId: string) =>
+    request(`/classes/${id}/students`, {
+      method: 'POST',
+      body: JSON.stringify({ studentId }),
+    }),
+  removeStudent: (id: string, studentId: string) =>
+    request(`/classes/${id}/students/${studentId}`, { method: 'DELETE' }),
+  questions: (params: string) =>
+    request<{
+      items: Array<Record<string, any>>;
+      total: number;
+      pageCount: number;
+    }>(`/questions?${params}`),
+  createQuestion: (body: unknown) =>
+    request('/questions', { method: 'POST', body: JSON.stringify(body) }),
+  updateQuestion: (id: string, body: unknown) =>
+    request(`/questions/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  archiveQuestion: (id: string) =>
+    request(`/questions/${id}`, { method: 'DELETE' }),
+  duplicateQuestion: (id: string) =>
+    request(`/questions/${id}/duplicate`, { method: 'POST' }),
 };
