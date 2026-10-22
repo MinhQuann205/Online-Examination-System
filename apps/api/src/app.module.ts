@@ -6,9 +6,17 @@ import { AuthService } from './auth/auth.service';
 import { AuthGuard, RolesGuard } from './auth/guards';
 import { DashboardController } from './dashboard/dashboard.controller';
 import { PrismaService } from './prisma/prisma.service';
+import { UsersModule } from './users/users.module';
+import { ClassesModule } from './classes/classes.module';
+import { QuestionsModule } from './questions/questions.module';
 
 @Module({
-  imports: [JwtModule.register({})],
+  imports: [
+    JwtModule.register({}),
+    UsersModule,
+    ClassesModule,
+    QuestionsModule,
+  ],
   controllers: [AuthController, DashboardController],
   providers: [
     PrismaService,

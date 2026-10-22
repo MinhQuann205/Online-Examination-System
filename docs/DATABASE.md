@@ -12,3 +12,5 @@ Prisma schema nằm ở `apps/api/prisma/schema.prisma`, migration SQL đầu ti
 Đề thi đã phát hành phải tạo version mới khi chỉnh sửa. Khi bắt đầu lượt làm, service Phase 2 sẽ sao chép nội dung version vào `ExamAttempt.examSnapshot`; khi chấm, dùng snapshot đó thay vì câu hỏi hiện tại. Nhờ vậy lịch sử không thay đổi khi ngân hàng câu hỏi được sửa. Chưa có API tạo/sửa đề hoặc chấm điểm trong Phase 1.
 
 Các bất biến xuyên bảng như “giáo viên của lớp”, “người nhận giao bài là học viên” và “đáp án thuộc snapshot” sẽ được kiểm tra trong service và transaction ở Phase 2. Prisma không biểu diễn được hết các CHECK trong schema; giữ nguyên chúng trong migration SQL.
+
+Phase 2 bổ sung enum `Difficulty` và các trường `Question.difficulty`, `Question.topic`, `Question.archivedAt`, `Class.isArchived` trong migration `20261023000000_management_fields`. Migration chỉ thêm cột/index với default an toàn, không xóa dữ liệu hiện có.

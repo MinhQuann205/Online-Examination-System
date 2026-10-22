@@ -20,6 +20,12 @@ enum QuestionType {
   MATCHING
 }
 
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
 enum ExamStatus {
   DRAFT
   PUBLISHED
@@ -59,6 +65,7 @@ model Class {
   name        String           @db.VarChar(150)
   code        String           @unique @db.VarChar(40)
   description String?
+  isArchived  Boolean          @default(false)
   teacherId   String           @db.Uuid
   teacher     User             @relation("ClassTeacher", fields: [teacherId], references: [id])
   members     ClassMember[]
@@ -66,6 +73,7 @@ model Class {
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
 
+  @@index([isArchived, teacherId])
   @@index([teacherId])
 }
 
@@ -84,19 +92,24 @@ model ClassMember {
 }
 
 model Question {
-  id            String         @id @default(uuid()) @db.Uuid
-  authorId      String         @db.Uuid
-  author        User           @relation("QuestionAuthor", fields: [authorId], references: [id])
+  id            String           @id @default(uuid()) @db.Uuid
+  authorId      String           @db.Uuid
+  author        User             @relation("QuestionAuthor", fields: [authorId], references: [id])
   type          QuestionType
   content       String
   explanation   String?
+  difficulty    Difficulty       @default(MEDIUM)
+  topic         String?          @db.VarChar(120)
+  archivedAt    DateTime?
   options       QuestionOption[]
   matchingPairs MatchingPair[]
   examQuestions ExamQuestion[]
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 
   @@index([authorId, type])
+  @@index([authorId, archivedAt, difficulty])
+  @@index([topic])
 }
 
 model QuestionOption {
@@ -145,17 +158,17 @@ model Exam {
 }
 
 model ExamQuestion {
-  id               String        @id @default(uuid()) @db.Uuid
-  examId           String        @db.Uuid
-  questionId       String        @db.Uuid
-  exam             Exam          @relation(fields: [examId], references: [id], onDelete: Cascade)
-  question         Question      @relation(fields: [questionId], references: [id])
+  id               String   @id @default(uuid()) @db.Uuid
+  examId           String   @db.Uuid
+  questionId       String   @db.Uuid
+  exam             Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  question         Question @relation(fields: [questionId], references: [id])
   version          Int
   position         Int
-  points           Decimal       @db.Decimal(8, 2)
+  points           Decimal  @db.Decimal(8, 2)
   questionSnapshot Json
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   @@unique([examId, version, position])
   @@unique([examId, version, questionId])
@@ -163,21 +176,21 @@ model ExamQuestion {
 }
 
 model ExamAssignment {
-  id         String        @id @default(uuid()) @db.Uuid
-  examId     String        @db.Uuid
-  exam       Exam          @relation(fields: [examId], references: [id])
-  classId    String?       @db.Uuid
-  class      Class?        @relation(fields: [classId], references: [id])
-  studentId  String?       @db.Uuid
-  student    User?         @relation("AssignmentStudent", fields: [studentId], references: [id])
-  createdById String       @db.Uuid
-  createdBy  User          @relation("AssignmentCreator", fields: [createdById], references: [id])
-  opensAt    DateTime?
-  closesAt   DateTime?
-  maxAttempts Int          @default(1)
-  attempts   ExamAttempt[]
-  createdAt  DateTime      @default(now())
-  updatedAt  DateTime      @updatedAt
+  id          String        @id @default(uuid()) @db.Uuid
+  examId      String        @db.Uuid
+  exam        Exam          @relation(fields: [examId], references: [id])
+  classId     String?       @db.Uuid
+  class       Class?        @relation(fields: [classId], references: [id])
+  studentId   String?       @db.Uuid
+  student     User?         @relation("AssignmentStudent", fields: [studentId], references: [id])
+  createdById String        @db.Uuid
+  createdBy   User          @relation("AssignmentCreator", fields: [createdById], references: [id])
+  opensAt     DateTime?
+  closesAt    DateTime?
+  maxAttempts Int           @default(1)
+  attempts    ExamAttempt[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
 
   @@index([examId])
   @@index([classId, opensAt])
@@ -185,23 +198,23 @@ model ExamAssignment {
 }
 
 model ExamAttempt {
-  id                String         @id @default(uuid()) @db.Uuid
-  examId            String         @db.Uuid
-  exam              Exam           @relation(fields: [examId], references: [id])
-  assignmentId      String         @db.Uuid
-  assignment        ExamAssignment @relation(fields: [assignmentId], references: [id])
-  studentId         String         @db.Uuid
-  student           User           @relation(fields: [studentId], references: [id])
-  examVersion       Int
-  examSnapshot      Json
-  status            AttemptStatus  @default(IN_PROGRESS)
-  startedAt         DateTime       @default(now())
-  submittedAt       DateTime?
-  score             Decimal?       @db.Decimal(8, 2)
-  maxScore          Decimal?       @db.Decimal(8, 2)
-  answers           AttemptAnswer[]
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  id           String          @id @default(uuid()) @db.Uuid
+  examId       String          @db.Uuid
+  exam         Exam            @relation(fields: [examId], references: [id])
+  assignmentId String          @db.Uuid
+  assignment   ExamAssignment  @relation(fields: [assignmentId], references: [id])
+  studentId    String          @db.Uuid
+  student      User            @relation(fields: [studentId], references: [id])
+  examVersion  Int
+  examSnapshot Json
+  status       AttemptStatus   @default(IN_PROGRESS)
+  startedAt    DateTime        @default(now())
+  submittedAt  DateTime?
+  score        Decimal?        @db.Decimal(8, 2)
+  maxScore     Decimal?        @db.Decimal(8, 2)
+  answers      AttemptAnswer[]
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
 
   @@index([studentId, startedAt])
   @@index([examId, status])
@@ -209,14 +222,14 @@ model ExamAttempt {
 }
 
 model AttemptAnswer {
-  id          String      @id @default(uuid()) @db.Uuid
-  attemptId   String      @db.Uuid
-  attempt     ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
-  questionId  String      @db.Uuid
-  answer      Json
-  awarded     Decimal?    @db.Decimal(8, 2)
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  id         String      @id @default(uuid()) @db.Uuid
+  attemptId  String      @db.Uuid
+  attempt    ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId String      @db.Uuid
+  answer     Json
+  awarded    Decimal?    @db.Decimal(8, 2)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
 
   @@unique([attemptId, questionId])
 }
