@@ -5,9 +5,12 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { allPages } from '@/lib/all-pages';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
+import { QuestionForm } from '@/components/question-form';
+import { ManagementDetail } from '@/components/management-detail';
 
 type Kind = 'users' | 'classes' | 'questions';
 const headings = {
@@ -40,7 +43,9 @@ export function Management({ kind }: { kind: Kind }) {
             new URLSearchParams({ search, page: String(page) }).toString(),
           )
         : kind === 'classes'
-          ? api.classes()
+          ? api.classes(
+              new URLSearchParams({ search, page: String(page) }).toString(),
+            )
           : api.questions(
               new URLSearchParams({ search, page: String(page) }).toString(),
             ),
@@ -169,7 +174,8 @@ function UserForm({ onSubmit }: { onSubmit: (v: any) => void }) {
         onChange={(e) => setName(e.target.value)}
       />
       <select
-        className="h-11 rounded-lg border px-3 dark:bg-slate-900"
+        aria-label="Vai trò tài khoản"
+        className="h-11 min-w-0 w-full rounded-lg border px-3 dark:bg-slate-900"
         value={role}
         onChange={(e) => setRole(e.target.value)}
       >
@@ -194,7 +200,8 @@ function ClassForm({ onSubmit }: { onSubmit: (v: any) => void }) {
     [teacherId, setTeacher] = useState('');
   const teachers = useQuery({
     queryKey: ['users', 'teachers'],
-    queryFn: () => api.users('role=TEACHER&limit=100'),
+    queryFn: () =>
+      allPages((page) => api.users(`role=TEACHER&limit=20&page=${page}`)),
   });
   return (
     <form
@@ -218,159 +225,19 @@ function ClassForm({ onSubmit }: { onSubmit: (v: any) => void }) {
       />
       <select
         required
-        className="h-11 rounded-lg border px-3 dark:bg-slate-900"
+        aria-label="Giảng viên phụ trách"
+        className="h-11 min-w-0 w-full rounded-lg border px-3 dark:bg-slate-900"
         value={teacherId}
         onChange={(e) => setTeacher(e.target.value)}
       >
         <option value="">Chọn giảng viên</option>
-        {(teachers.data?.items || []).map((u: any) => (
+        {(teachers.data || []).map((u: any) => (
           <option key={u.id} value={u.id}>
             {u.fullName} ({u.email})
           </option>
         ))}
       </select>
       <Button>Tạo lớp</Button>
-    </form>
-  );
-}
-function QuestionForm({ onSubmit }: { onSubmit: (v: any) => void }) {
-  const [type, setType] = useState('SINGLE_CHOICE'),
-    [content, setContent] = useState(''),
-    [topic, setTopic] = useState(''),
-    [difficulty, setDifficulty] = useState('MEDIUM'),
-    [options, setOptions] = useState([
-      { content: '', isCorrect: true },
-      { content: '', isCorrect: false },
-    ]),
-    [pairs, setPairs] = useState([
-      { leftText: '', rightText: '' },
-      { leftText: '', rightText: '' },
-    ]);
-  return (
-    <form
-      className="space-y-3"
-      onSubmit={(e) => {
-        e.preventDefault();
-        onSubmit({
-          type,
-          content,
-          topic,
-          difficulty,
-          ...(type === 'MATCHING' ? { matchingPairs: pairs } : { options }),
-        });
-      }}
-    >
-      <textarea
-        required
-        className="min-h-24 w-full rounded-lg border p-3 dark:bg-slate-900"
-        placeholder="Nội dung câu hỏi"
-        value={content}
-        onChange={(e) => setContent(e.target.value)}
-      />
-      <div className="flex flex-wrap gap-3">
-        <select
-          className="h-10 rounded border px-3 dark:bg-slate-900"
-          value={type}
-          onChange={(e) => setType(e.target.value)}
-        >
-          <option value="SINGLE_CHOICE">Một đáp án</option>
-          <option value="MULTIPLE_CHOICE">Nhiều đáp án</option>
-          <option value="MATCHING">Ghép nối</option>
-        </select>
-        <select
-          className="h-10 rounded border px-3 dark:bg-slate-900"
-          value={difficulty}
-          onChange={(e) => setDifficulty(e.target.value)}
-        >
-          <option value="EASY">Dễ</option>
-          <option value="MEDIUM">Trung bình</option>
-          <option value="HARD">Khó</option>
-        </select>
-        <Input
-          className="max-w-xs"
-          placeholder="Chủ đề"
-          value={topic}
-          onChange={(e) => setTopic(e.target.value)}
-        />
-      </div>
-      {type === 'MATCHING'
-        ? pairs.map((p, i) => (
-            <div key={i} className="grid grid-cols-2 gap-2">
-              <Input
-                placeholder={`Vế trái ${i + 1}`}
-                value={p.leftText}
-                onChange={(e) =>
-                  setPairs((a) =>
-                    a.map((x, j) =>
-                      j === i ? { ...x, leftText: e.target.value } : x,
-                    ),
-                  )
-                }
-              />
-              <Input
-                placeholder={`Vế phải ${i + 1}`}
-                value={p.rightText}
-                onChange={(e) =>
-                  setPairs((a) =>
-                    a.map((x, j) =>
-                      j === i ? { ...x, rightText: e.target.value } : x,
-                    ),
-                  )
-                }
-              />
-            </div>
-          ))
-        : options.map((o, i) => (
-            <div key={i} className="flex gap-2">
-              <Input
-                required
-                placeholder={`Lựa chọn ${i + 1}`}
-                value={o.content}
-                onChange={(e) =>
-                  setOptions((a) =>
-                    a.map((x, j) =>
-                      j === i ? { ...x, content: e.target.value } : x,
-                    ),
-                  )
-                }
-              />
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type={type === 'SINGLE_CHOICE' ? 'radio' : 'checkbox'}
-                  name="correct"
-                  checked={o.isCorrect}
-                  onChange={() =>
-                    setOptions((a) =>
-                      a.map((x, j) => ({
-                        ...x,
-                        isCorrect:
-                          type === 'SINGLE_CHOICE'
-                            ? j === i
-                            : j === i
-                              ? !x.isCorrect
-                              : x.isCorrect,
-                      })),
-                    )
-                  }
-                />{' '}
-                Đúng
-              </label>
-            </div>
-          ))}
-      <div className="flex gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() =>
-            type === 'MATCHING'
-              ? setPairs((p) => [...p, { leftText: '', rightText: '' }])
-              : setOptions((o) => [...o, { content: '', isCorrect: false }])
-          }
-        >
-          Thêm dòng
-        </Button>
-        <Button>Lưu câu hỏi</Button>
-      </div>
     </form>
   );
 }
@@ -382,10 +249,12 @@ function UsersTable({
   onNotice: (s: string) => void;
 }) {
   const qc = useQueryClient();
+  const [selected, setSelected] = useState('');
   if (!data?.items?.length)
     return <p className="p-6 text-slate-500">Chưa có người dùng.</p>;
   return (
     <div className="overflow-x-auto">
+      {selected && <ManagementDetail kind="users" id={selected} />}
       <table className="w-full text-left text-sm">
         <thead>
           <tr className="border-b text-slate-500">
@@ -404,6 +273,9 @@ function UsersTable({
               <td>{u.role}</td>
               <td>{u.isActive ? 'Hoạt động' : 'Đã khóa'}</td>
               <td className="flex gap-2 py-2">
+                <Button variant="outline" onClick={() => setSelected(u.id)}>
+                  Xem chi tiết
+                </Button>
                 <Button
                   variant="outline"
                   onClick={async () => {
@@ -466,6 +338,7 @@ function ClassesTable({
           ))}
         </div>
       )}
+      {chosen && <ManagementDetail kind="classes" id={chosen} />}
       {chosen && (
         <div className="rounded-xl border p-4">
           <h3 className="font-semibold">Thành viên {detail.data?.name}</h3>
@@ -517,10 +390,12 @@ function QuestionsTable({
   onNotice: (s: string) => void;
 }) {
   const qc = useQueryClient();
+  const [selected, setSelected] = useState('');
   if (!data?.items?.length)
     return <p className="p-6 text-slate-500">Chưa có câu hỏi.</p>;
   return (
     <div className="space-y-3">
+      {selected && <ManagementDetail kind="questions" id={selected} />}
       {data.items.map((q: any) => (
         <div
           className="flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4"
@@ -533,6 +408,9 @@ function QuestionsTable({
             </p>
           </div>
           <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setSelected(q.id)}>
+              Xem chi tiết
+            </Button>
             <Button
               variant="outline"
               onClick={async () => {

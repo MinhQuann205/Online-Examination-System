@@ -108,7 +108,11 @@ export class AuthService {
       throw new UnauthorizedException();
     const tokens = await this.issue(user);
     const updated = await this.prisma.user.updateMany({
-      where: { id: user.id, refreshTokenHash: user.refreshTokenHash },
+      where: {
+        id: user.id,
+        tokenVersion: payload.version,
+        refreshTokenHash: user.refreshTokenHash,
+      },
       data: { refreshTokenHash: await argon2.hash(tokens.refreshToken) },
     });
     if (updated.count !== 1)
@@ -123,18 +127,12 @@ export class AuthService {
         secret: this.refreshSecret,
       });
       if (payload.kind !== 'refresh') return;
-      const user = await this.prisma.user.findUnique({
-        where: { id: payload.sub },
+      // A signed, unexpired refresh from this session can revoke it even if
+      // rotation just replaced its hash. Version CAS makes revocation idempotent.
+      await this.prisma.user.updateMany({
+        where: { id: payload.sub, tokenVersion: payload.version },
+        data: { refreshTokenHash: null, tokenVersion: { increment: 1 } },
       });
-      if (
-        user?.refreshTokenHash &&
-        (await argon2.verify(user.refreshTokenHash, token))
-      ) {
-        await this.prisma.user.update({
-          where: { id: user.id },
-          data: { refreshTokenHash: null, tokenVersion: { increment: 1 } },
-        });
-      }
     } catch {
       /* Invalid cookie is cleared by the controller. */
     }

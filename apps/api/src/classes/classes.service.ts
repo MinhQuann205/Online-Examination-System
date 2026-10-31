@@ -46,7 +46,7 @@ export class ClassesService {
         where,
         skip: (page - 1) * limit,
         take: limit,
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         include: {
           teacher: { select: { id: true, fullName: true, email: true } },
           _count: { select: { members: true } },
@@ -102,6 +102,8 @@ export class ClassesService {
     }
   }
   async update(id: string, user: AuthRequest['user'], input: unknown) {
+    if (user.role !== 'ADMIN' && user.role !== 'TEACHER')
+      throw new ForbiddenException();
     const dto = patchSchema.parse(input);
     const c = await this.db.class.findUnique({
       where: { id },
@@ -111,6 +113,8 @@ export class ClassesService {
     if (user.role === 'TEACHER' && c.teacherId !== user.id)
       throw new ForbiddenException();
     if (dto.teacherId) {
+      if (user.role !== 'ADMIN')
+        throw new ForbiddenException('Chỉ Admin được phân công giảng viên');
       const t = await this.db.user.findUnique({
         where: { id: dto.teacherId },
         select: { role: true, isActive: true },
@@ -127,6 +131,7 @@ export class ClassesService {
     });
   }
   async addStudent(id: string, studentId: string, user: AuthRequest['user']) {
+    studentId = z.uuid().parse(studentId);
     const c = await this.db.class.findUnique({
       where: { id },
       select: { teacherId: true },

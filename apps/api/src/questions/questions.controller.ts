@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -31,24 +32,27 @@ export class QuestionsController {
   @Get('statistics') @Roles('TEACHER') stats(@Req() r: AuthRequest) {
     return this.service.statistics(r.user);
   }
-  @Get(':id') get(@Param('id') id: string, @Req() r: AuthRequest) {
+  @Get(':id') get(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() r: AuthRequest,
+  ) {
     return this.service.get(id, r.user);
   }
   @Patch(':id') @Roles('TEACHER') update(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Req() r: AuthRequest,
     @Body() b: unknown,
   ) {
     return this.service.update(id, r.user, b);
   }
   @Post(':id/duplicate') @Roles('TEACHER') duplicate(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Req() r: AuthRequest,
   ) {
     return this.service.duplicate(id, r.user);
   }
   @Delete(':id') @Roles('TEACHER') archive(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Req() r: AuthRequest,
   ) {
     return this.service.archive(id, r.user);

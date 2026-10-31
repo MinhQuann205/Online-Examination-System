@@ -11,3 +11,21 @@ packages/shared/dist/
 coverage/
 .DS_Store
 pnpm-debug.log
+
+# Local audit originals remain on disk; publish the release summary instead.
+/docs/PHASE3_ACCEPTANCE_REPORT.md
+/docs/PHASE3_P0_FIX_REPORT.md
+/docs/PHASE3_P1_FIX_REPORT.md
+/docs/PHASE3_P2_FIX_REPORT.md
+/docs/PHASE3_FINAL_ACCEPTANCE_REPORT.md
+/docs/PHASE3_DEV_PREDEPLOY_CHECK_REPORT.md
+/docs/PHASE3_DEV_MIGRATION_DEPLOY_REPORT.md
+/docs/PHASE3_DEV_MIGRATION_UNBLOCK_REPORT.md
+/docs/PHASE3_GIT_REVIEW_REPORT.md
+/docs/PHASE3_GIT_REVIEW_FIX_REPORT.md
+# Local database/browser evidence (migration SQL remains included).
+*.dump
+*.backup
+*.log
+/playwright-report/
+/test-results/

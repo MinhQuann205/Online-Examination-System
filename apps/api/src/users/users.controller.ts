@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -32,23 +33,28 @@ export class UsersController {
   @Post() @Roles('ADMIN') create(@Body() body: unknown) {
     return this.service.create(body);
   }
-  @Get(':id') get(@Param('id') id: string, @Req() req: AuthRequest) {
+  @Get(':id') get(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: AuthRequest,
+  ) {
     return this.service.get(id, req.user);
   }
   @Patch(':id') @Roles('ADMIN') patch(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: unknown,
     @Req() req: AuthRequest,
   ) {
     return this.service.update(id, req.user, body);
   }
   @Patch(':id/status') @Roles('ADMIN') status(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { isActive: boolean },
   ) {
     return this.service.status(id, body.isActive === true);
   }
-  @Post(':id/reset-password') @Roles('ADMIN') reset(@Param('id') id: string) {
+  @Post(':id/reset-password') @Roles('ADMIN') reset(
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
     return this.service.resetPassword(id);
   }
 }

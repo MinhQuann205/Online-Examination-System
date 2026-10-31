@@ -94,7 +94,7 @@ export class QuestionsService {
         where,
         skip: (page - 1) * limit,
         take: limit,
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         include: {
           author: { select: { id: true, fullName: true } },
           options: { orderBy: { position: 'asc' } },
