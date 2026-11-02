@@ -64,7 +64,7 @@ export class UsersService {
         select: safeSelect,
         skip: (q.page - 1) * q.limit,
         take: q.limit,
-        orderBy: { createdAt: q.order },
+        orderBy: [{ createdAt: q.order }, { id: q.order }],
       }),
       this.db.user.count({ where }),
     ]);
@@ -81,7 +81,8 @@ export class UsersService {
     try {
       return await this.db.user.create({
         data: {
-          ...dto,
+          email: dto.email,
+          fullName: dto.fullName,
           role: dto.role as Role,
           passwordHash: await argon2.hash(dto.password),
         },

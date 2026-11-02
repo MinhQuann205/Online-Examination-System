@@ -149,12 +149,27 @@ model Exam {
   status      ExamStatus       @default(DRAFT)
   version     Int              @default(1)
   questions   ExamQuestion[]
+  versions    ExamVersion[]
   assignments ExamAssignment[]
   attempts    ExamAttempt[]
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
 
   @@index([authorId, status])
+}
+
+model ExamVersion {
+  id          String           @id @default(uuid()) @db.Uuid
+  examId      String           @db.Uuid
+  exam        Exam             @relation(fields: [examId], references: [id], onDelete: Restrict)
+  number      Int
+  snapshot    Json
+  publishedAt DateTime         @default(now())
+  assignments ExamAssignment[]
+  attempts    ExamAttempt[]
+
+  @@unique([examId, number])
+  @@index([examId, publishedAt])
 }
 
 model ExamQuestion {
@@ -176,49 +191,59 @@ model ExamQuestion {
 }
 
 model ExamAssignment {
-  id          String        @id @default(uuid()) @db.Uuid
-  examId      String        @db.Uuid
-  exam        Exam          @relation(fields: [examId], references: [id])
-  classId     String?       @db.Uuid
-  class       Class?        @relation(fields: [classId], references: [id])
-  studentId   String?       @db.Uuid
-  student     User?         @relation("AssignmentStudent", fields: [studentId], references: [id])
-  createdById String        @db.Uuid
-  createdBy   User          @relation("AssignmentCreator", fields: [createdById], references: [id])
-  opensAt     DateTime?
-  closesAt    DateTime?
-  maxAttempts Int           @default(1)
-  attempts    ExamAttempt[]
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id            String        @id @default(uuid()) @db.Uuid
+  examId        String        @db.Uuid
+  exam          Exam          @relation(fields: [examId], references: [id])
+  examVersionId String?       @db.Uuid
+  examVersion   ExamVersion?  @relation(fields: [examVersionId], references: [id], onDelete: SetNull)
+  classId       String?       @db.Uuid
+  class         Class?        @relation(fields: [classId], references: [id])
+  studentId     String?       @db.Uuid
+  student       User?         @relation("AssignmentStudent", fields: [studentId], references: [id])
+  createdById   String        @db.Uuid
+  createdBy     User          @relation("AssignmentCreator", fields: [createdById], references: [id])
+  opensAt       DateTime?
+  closesAt      DateTime?
+  maxAttempts   Int           @default(1)
+  showScore     Boolean       @default(false)
+  showAnswers   Boolean       @default(false)
+  attempts      ExamAttempt[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
   @@index([examId])
   @@index([classId, opensAt])
   @@index([studentId, opensAt])
+  @@index([examVersionId])
 }
 
 model ExamAttempt {
-  id           String          @id @default(uuid()) @db.Uuid
-  examId       String          @db.Uuid
-  exam         Exam            @relation(fields: [examId], references: [id])
-  assignmentId String          @db.Uuid
-  assignment   ExamAssignment  @relation(fields: [assignmentId], references: [id])
-  studentId    String          @db.Uuid
-  student      User            @relation(fields: [studentId], references: [id])
-  examVersion  Int
-  examSnapshot Json
-  status       AttemptStatus   @default(IN_PROGRESS)
-  startedAt    DateTime        @default(now())
-  submittedAt  DateTime?
-  score        Decimal?        @db.Decimal(8, 2)
-  maxScore     Decimal?        @db.Decimal(8, 2)
-  answers      AttemptAnswer[]
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
+  id            String          @id @default(uuid()) @db.Uuid
+  examId        String          @db.Uuid
+  exam          Exam            @relation(fields: [examId], references: [id])
+  assignmentId  String          @db.Uuid
+  assignment    ExamAssignment  @relation(fields: [assignmentId], references: [id])
+  examVersionId String?         @db.Uuid
+  version       ExamVersion?    @relation(fields: [examVersionId], references: [id], onDelete: SetNull)
+  studentId     String          @db.Uuid
+  student       User            @relation(fields: [studentId], references: [id])
+  examVersion   Int
+  examSnapshot  Json
+  status        AttemptStatus   @default(IN_PROGRESS)
+  startedAt     DateTime        @default(now())
+  deadlineAt    DateTime?
+  reviewQuestionIds String[]     @default([]) @db.Uuid
+  submittedAt   DateTime?
+  score         Decimal?        @db.Decimal(8, 2)
+  maxScore      Decimal?        @db.Decimal(8, 2)
+  answers       AttemptAnswer[]
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
 
   @@index([studentId, startedAt])
   @@index([examId, status])
   @@index([assignmentId, studentId])
+  @@index([status, deadlineAt])
 }
 
 model AttemptAnswer {
@@ -228,6 +253,7 @@ model AttemptAnswer {
   questionId String      @db.Uuid
   answer     Json
   awarded    Decimal?    @db.Decimal(8, 2)
+  revision   Int         @default(0)
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
 

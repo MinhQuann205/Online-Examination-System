@@ -9,6 +9,10 @@ import { PrismaService } from './prisma/prisma.service';
 import { UsersModule } from './users/users.module';
 import { ClassesModule } from './classes/classes.module';
 import { QuestionsModule } from './questions/questions.module';
+import { ExamsModule } from './exams/exams.module';
+import { ExamAssignmentsModule } from './exam-assignments/exam-assignments.module';
+import { ExamAttemptsModule } from './exam-attempts/exam-attempts.module';
+import { ResultsModule } from './results/results.module';
 
 @Module({
   imports: [
@@ -16,6 +20,10 @@ import { QuestionsModule } from './questions/questions.module';
     UsersModule,
     ClassesModule,
     QuestionsModule,
+    ExamsModule,
+    ExamAssignmentsModule,
+    ExamAttemptsModule,
+    ResultsModule,
   ],
   controllers: [AuthController, DashboardController],
   providers: [

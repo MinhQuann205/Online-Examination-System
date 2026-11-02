@@ -3,16 +3,20 @@
   "private": true,
   "packageManager": "pnpm@10.18.3",
   "scripts": {
-    "dev": "corepack pnpm --parallel --filter @exam/api --filter @exam/web dev",
+    "dev": "corepack pnpm dev:prepare && corepack pnpm --parallel --filter @exam/api --filter @exam/web dev",
     "build": "corepack pnpm --filter @exam/shared build && corepack pnpm --filter @exam/api build && corepack pnpm --filter @exam/web build",
     "typecheck": "corepack pnpm --filter @exam/shared build && corepack pnpm --filter @exam/api typecheck && corepack pnpm --filter @exam/web typecheck",
     "lint": "corepack pnpm --recursive lint",
-    "test": "corepack pnpm --filter @exam/shared build && corepack pnpm --filter @exam/api test",
+    "test": "corepack pnpm test:tooling && corepack pnpm --filter @exam/shared build && corepack pnpm --filter @exam/api test && corepack pnpm --filter @exam/web test",
+    "test:integration": "node --test --test-concurrency=1 tests/p0-api.test.cjs tests/p1-api.test.cjs tests/p1-migration.test.cjs tests/p2-api.test.cjs tests/git-review-api.test.cjs",
+    "test:e2e": "node --test --test-concurrency=1 tests/p0-browser.test.cjs tests/p1-browser.test.cjs tests/p2-browser.test.cjs tests/git-review-browser.test.cjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:generate": "corepack pnpm --filter @exam/api db:generate",
     "db:migrate": "corepack pnpm --filter @exam/api db:migrate",
-    "db:seed": "corepack pnpm --filter @exam/api db:seed"
+    "db:seed": "corepack pnpm --filter @exam/api db:seed",
+    "dev:prepare": "corepack pnpm db:generate && corepack pnpm --filter @exam/shared build",
+    "test:tooling": "node --test tests/test-infrastructure.test.cjs"
   },
   "devDependencies": {
     "prettier": "^3.6.2",

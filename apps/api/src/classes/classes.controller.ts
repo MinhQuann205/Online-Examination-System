@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -27,32 +28,35 @@ export class ClassesController {
   @Post() @Roles('ADMIN') create(@Body() b: unknown) {
     return this.service.create(b);
   }
-  @Get(':id') get(@Param('id') id: string, @Req() r: AuthRequest) {
+  @Get(':id') get(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() r: AuthRequest,
+  ) {
     return this.service.get(id, r.user);
   }
   @Patch(':id') @Roles('ADMIN', 'TEACHER') update(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Req() r: AuthRequest,
     @Body() b: unknown,
   ) {
     return this.service.update(id, r.user, b);
   }
   @Get(':id/students') students(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Req() r: AuthRequest,
   ) {
     return this.service.get(id, r.user).then((c) => c.members);
   }
   @Post(':id/students') @Roles('ADMIN', 'TEACHER') add(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Req() r: AuthRequest,
     @Body() b: { studentId: string },
   ) {
     return this.service.addStudent(id, b.studentId, r.user);
   }
   @Delete(':id/students/:studentId') @Roles('ADMIN', 'TEACHER') remove(
-    @Param('id') id: string,
-    @Param('studentId') s: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('studentId', new ParseUUIDPipe()) s: string,
     @Req() r: AuthRequest,
   ) {
     return this.service.removeStudent(id, s, r.user);

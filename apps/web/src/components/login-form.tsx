@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -10,9 +10,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 
+const subscribeReady = () => () => {};
+const clientReady = () => true;
+const serverReady = () => false;
+
 export function LoginForm() {
   const router = useRouter();
   const [serverError, setServerError] = useState('');
+  const ready = useSyncExternalStore(subscribeReady, clientReady, serverReady);
   const {
     register,
     handleSubmit,
@@ -76,62 +81,79 @@ export function LoginForm() {
                 Nhập tài khoản được cấp để tiếp tục.
               </p>
             </div>
-            <form onSubmit={onSubmit} className="space-y-5" noValidate>
-              <div>
-                <label
-                  htmlFor="email"
-                  className="mb-2 block text-sm font-medium"
-                >
-                  Email
-                </label>
-                <Input
-                  id="email"
-                  type="email"
-                  autoComplete="username"
-                  placeholder="ten@congty.vn"
-                  {...register('email')}
-                  aria-invalid={!!errors.email}
-                />
-                <p className="mt-1 text-sm text-red-600">
-                  {errors.email?.message}
+            <form
+              method="post"
+              action="/login/unavailable"
+              onSubmit={onSubmit}
+              className="space-y-5"
+              noValidate
+            >
+              <noscript>
+                <p role="alert">
+                  Vui lòng bật JavaScript để đăng nhập an toàn.
                 </p>
-              </div>
-              <div>
-                <label
-                  htmlFor="password"
-                  className="mb-2 block text-sm font-medium"
-                >
-                  Mật khẩu
-                </label>
-                <Input
-                  id="password"
-                  type="password"
-                  autoComplete="current-password"
-                  placeholder="Nhập mật khẩu"
-                  {...register('password')}
-                  aria-invalid={!!errors.password}
-                />
-                <p className="mt-1 text-sm text-red-600">
-                  {errors.password?.message}
-                </p>
-              </div>
-              {serverError && (
-                <p
-                  role="alert"
-                  className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300"
-                >
-                  {serverError}
-                </p>
-              )}
-              <Button className="w-full" type="submit" disabled={isSubmitting}>
-                {isSubmitting ? (
-                  'Đang đăng nhập...'
-                ) : (
-                  <>
-                    Đăng nhập <ArrowRight size={16} />
-                  </>
+              </noscript>
+              <fieldset disabled={!ready || isSubmitting} className="space-y-5">
+                <div>
+                  <label
+                    htmlFor="email"
+                    className="mb-2 block text-sm font-medium"
+                  >
+                    Email
+                  </label>
+                  <Input
+                    id="email"
+                    type="email"
+                    autoComplete="username"
+                    placeholder="ten@congty.vn"
+                    {...register('email')}
+                    aria-invalid={!!errors.email}
+                  />
+                  <p className="mt-1 text-sm text-red-600">
+                    {errors.email?.message}
+                  </p>
+                </div>
+                <div>
+                  <label
+                    htmlFor="password"
+                    className="mb-2 block text-sm font-medium"
+                  >
+                    Mật khẩu
+                  </label>
+                  <Input
+                    id="password"
+                    type="password"
+                    autoComplete="current-password"
+                    placeholder="Nhập mật khẩu"
+                    {...register('password')}
+                    aria-invalid={!!errors.password}
+                  />
+                  <p className="mt-1 text-sm text-red-600">
+                    {errors.password?.message}
+                  </p>
+                </div>
+                {serverError && (
+                  <p
+                    role="alert"
+                    className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300"
+                  >
+                    {serverError}
+                  </p>
                 )}
-              </Button>
+                <Button
+                  className="w-full"
+                  type="submit"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? (
+                    'Đang đăng nhập...'
+                  ) : (
+                    <>
+                      Đăng nhập <ArrowRight size={16} />
+                    </>
+                  )}
+                </Button>
+              </fieldset>
             </form>
           </Card>
           <p className="mt-6 text-center text-sm text-slate-500">

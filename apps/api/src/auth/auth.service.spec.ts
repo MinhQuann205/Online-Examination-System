@@ -43,12 +43,22 @@ describe('AuthService', () => {
             where,
             data,
           }: {
-            where: { refreshTokenHash: string };
-            data: { refreshTokenHash: string };
+            where: { refreshTokenHash?: string; tokenVersion?: number };
+            data: {
+              refreshTokenHash: string | null;
+              tokenVersion?: { increment: number };
+            };
           }) => {
-            if (user.refreshTokenHash !== where.refreshTokenHash)
+            if (
+              (where.refreshTokenHash !== undefined &&
+                user.refreshTokenHash !== where.refreshTokenHash) ||
+              (where.tokenVersion !== undefined &&
+                user.tokenVersion !== where.tokenVersion)
+            )
               return { count: 0 };
             user.refreshTokenHash = data.refreshTokenHash;
+            if (data.tokenVersion)
+              user.tokenVersion += data.tokenVersion.increment;
             return { count: 1 };
           },
         ),
@@ -92,5 +102,21 @@ describe('AuthService', () => {
       status: 401,
     });
     expect((await service.refresh(second.refreshToken)).user.id).toBe(user.id);
+  });
+
+  it('revokes a rotated session when logout carries the previous signed refresh', async () => {
+    const first = await service.login({
+      email: user.email,
+      password: 'correct-password',
+    });
+    const second = await service.refresh(first.refreshToken);
+    await service.logout(first.refreshToken);
+    expect(user.refreshTokenHash).toBeNull();
+    expect(user.tokenVersion).toBe(1);
+    await expect(service.refresh(second.refreshToken)).rejects.toMatchObject({
+      status: 401,
+    });
+    await service.logout(first.refreshToken);
+    expect(user.tokenVersion).toBe(1);
   });
 });

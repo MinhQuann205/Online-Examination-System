@@ -1,5 +1,6 @@
 'use client';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from 'next-themes';
 import {
@@ -84,7 +85,7 @@ export function DashboardShell({ initialUser }: { initialUser: CurrentUser }) {
             <X size={20} />
           </Button>
         </div>
-        <div className="mb-3 px-3 text-xs font-semibold uppercase tracking-widest text-slate-400">
+        <div className="mb-3 px-3 text-xs font-semibold uppercase tracking-widest text-slate-600 dark:text-slate-300">
           Không gian làm việc
         </div>
         <nav aria-label="Điều hướng chính">
@@ -110,6 +111,14 @@ export function DashboardShell({ initialUser }: { initialUser: CurrentUser }) {
               Lớp học
             </a>
           )}
+          {user.role === 'ADMIN' && (
+            <Link
+              className="mt-1 block rounded-lg px-3 py-3 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+              href="/admin/exams"
+            >
+              Theo dõi bài thi
+            </Link>
+          )}
           {user.role === 'TEACHER' && (
             <>
               <a
@@ -124,15 +133,47 @@ export function DashboardShell({ initialUser }: { initialUser: CurrentUser }) {
               >
                 Ngân hàng câu hỏi
               </a>
+              <Link
+                className="mt-1 block rounded-lg px-3 py-3 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+                href="/teacher/exams"
+              >
+                Quản lý đề thi
+              </Link>
+              <Link
+                className="mt-1 block rounded-lg px-3 py-3 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+                href="/teacher/assignments"
+              >
+                Giao bài kiểm tra
+              </Link>
+              <Link
+                className="mt-1 block rounded-lg px-3 py-3 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+                href="/teacher/results"
+              >
+                Kết quả thi
+              </Link>
             </>
           )}
           {user.role === 'STUDENT' && (
-            <a
-              className="mt-1 block rounded-lg px-3 py-3 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
-              href="/student/classes"
-            >
-              Lớp học
-            </a>
+            <>
+              <a
+                className="mt-1 block rounded-lg px-3 py-3 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+                href="/student/classes"
+              >
+                Lớp học
+              </a>
+              <Link
+                className="mt-1 block rounded-lg px-3 py-3 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+                href="/student/exams"
+              >
+                Bài kiểm tra
+              </Link>
+              <Link
+                className="mt-1 block rounded-lg px-3 py-3 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+                href="/student/results"
+              >
+                Lịch sử kết quả
+              </Link>
+            </>
           )}
         </nav>
         <div className="absolute bottom-5 left-5 right-5 border-t border-slate-200 pt-5 dark:border-slate-800">
@@ -218,7 +259,7 @@ export function DashboardShell({ initialUser }: { initialUser: CurrentUser }) {
                 </div>
                 <div>
                   <dt className="text-sm text-slate-500">Trạng thái kết nối</dt>
-                  <dd className="mt-1 font-medium text-emerald-600">
+                  <dd className="mt-1 font-medium text-emerald-700 dark:text-emerald-400">
                     {dashboard ? 'Đã kết nối' : 'Đang tải...'}
                   </dd>
                 </div>
