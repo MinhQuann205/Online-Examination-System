@@ -1,13 +1,11 @@
 'use client';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useTheme } from 'next-themes';
+import { useQuery } from '@tanstack/react-query';
+import { useTheme } from '@/components/theme-provider';
 import {
   BookOpen,
   GraduationCap,
   LayoutDashboard,
-  LogOut,
   Menu,
   Moon,
   Sun,
@@ -17,6 +15,7 @@ import {
 import { useState } from 'react';
 import type { CurrentUser } from '@exam/shared';
 import { api } from '@/lib/api';
+import { LogoutDialog } from '@/components/logout-dialog';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 
@@ -33,9 +32,7 @@ const descriptions = {
 const icons = { ADMIN: Users, TEACHER: BookOpen, STUDENT: GraduationCap };
 
 export function DashboardShell({ initialUser }: { initialUser: CurrentUser }) {
-  const router = useRouter();
-  const queryClient = useQueryClient();
-  const { theme, setTheme } = useTheme();
+  const { resolvedTheme, setTheme } = useTheme();
   const [menuOpen, setMenuOpen] = useState(false);
   const { data: user } = useQuery({
     queryKey: ['me'],
@@ -48,15 +45,6 @@ export function DashboardShell({ initialUser }: { initialUser: CurrentUser }) {
     queryFn: () => api.dashboard(role),
   });
   const Icon = icons[user.role];
-  async function logout() {
-    try {
-      await api.logout();
-    } finally {
-      queryClient.clear();
-      router.replace('/login');
-      router.refresh();
-    }
-  }
   return (
     <div className="min-h-screen lg:flex">
       {menuOpen && (
@@ -179,13 +167,9 @@ export function DashboardShell({ initialUser }: { initialUser: CurrentUser }) {
         <div className="absolute bottom-5 left-5 right-5 border-t border-slate-200 pt-5 dark:border-slate-800">
           <p className="truncate text-sm font-semibold">{user.fullName}</p>
           <p className="truncate text-xs text-slate-500">{user.email}</p>
-          <Button
-            variant="ghost"
-            className="mt-4 w-full justify-start"
-            onClick={logout}
-          >
-            <LogOut size={17} /> Đăng xuất
-          </Button>
+          <div className="mt-4">
+            <LogoutDialog />
+          </div>
         </div>
       </aside>
       <div className="min-w-0 flex-1">
@@ -205,10 +189,12 @@ export function DashboardShell({ initialUser }: { initialUser: CurrentUser }) {
           </div>
           <Button
             variant="outline"
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            onClick={() =>
+              setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')
+            }
             aria-label="Đổi giao diện sáng tối"
           >
-            {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            {resolvedTheme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
           </Button>
         </header>
         <main className="mx-auto max-w-5xl p-5 sm:p-8">

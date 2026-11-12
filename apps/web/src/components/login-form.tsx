@@ -1,21 +1,48 @@
 'use client';
 import { useState, useSyncExternalStore } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { loginSchema, type LoginInput } from '@exam/shared';
-import { ArrowRight, GraduationCap, LockKeyhole } from 'lucide-react';
-import { api } from '@/lib/api';
+import {
+  ArrowRight,
+  Eye,
+  EyeOff,
+  GraduationCap,
+  BookOpen,
+  ShieldCheck,
+} from 'lucide-react';
+import { checkExamBeforeLogout } from '@/lib/exam-session-guard';
+import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card } from '@/components/ui/card';
+import { AuthPageShell } from './auth-page-shell';
 
 const subscribeReady = () => () => {};
 const clientReady = () => true;
 const serverReady = () => false;
-
-export function LoginForm() {
+const roles = [
+  { id: 'student', name: 'Học viên', Icon: GraduationCap },
+  { id: 'teacher', name: 'Giảng viên', Icon: BookOpen },
+  { id: 'admin', name: 'Quản trị viên', Icon: ShieldCheck },
+];
+export function LoginForm({
+  initialRole = 'student',
+}: {
+  initialRole?: string;
+}) {
   const router = useRouter();
+  const queryClient = useQueryClient();
+  const account = useQuery({
+    queryKey: ['me'],
+    queryFn: api.me,
+    retry: false,
+    staleTime: 0,
+  });
+  const [selected, setSelected] = useState(initialRole);
+  const [visible, setVisible] = useState(false);
   const [serverError, setServerError] = useState('');
   const ready = useSyncExternalStore(subscribeReady, clientReady, serverReady);
   const {
@@ -29,138 +56,165 @@ export function LoginForm() {
   const onSubmit = handleSubmit(async (values) => {
     setServerError('');
     try {
+      const blocked = await checkExamBeforeLogout();
+      if (blocked) {
+        setServerError(blocked);
+        return;
+      }
+      await queryClient.cancelQueries();
+      queryClient.clear();
       const user = await api.login(values.email, values.password);
+      queryClient.clear();
       router.replace(`/dashboard/${user.role.toLowerCase()}`);
       router.refresh();
     } catch (error) {
       setServerError(
-        error instanceof Error ? error.message : 'Đăng nhập thất bại',
+        error instanceof ApiError
+          ? error.status === 401
+            ? 'Email hoặc mật khẩu không đúng, hoặc tài khoản không còn hoạt động.'
+            : error.status === 403
+              ? 'Yêu cầu đăng nhập bị từ chối (403). Vui lòng liên hệ quản trị viên để kiểm tra cấu hình truy cập.'
+              : error.message
+          : error instanceof Error && error.name === 'TimeoutError'
+            ? 'Máy chủ phản hồi quá lâu. Chưa xác nhận đăng nhập. Kiểm tra kết nối rồi thử lại.'
+            : 'Không kết nối được máy chủ. Kiểm tra kết nối và thử lại.',
       );
     }
   });
   return (
-    <main className="grid min-h-screen lg:grid-cols-2">
-      <section className="hidden flex-col justify-between bg-gradient-to-br from-slate-950 via-blue-950 to-blue-800 p-12 text-white lg:flex">
-        <div className="flex items-center gap-3 text-xl font-bold">
-          <span className="rounded-xl bg-white/15 p-2">
-            <GraduationCap />
-          </span>{' '}
-          ExamSpace
-        </div>
-        <div>
-          <p className="mb-5 inline-block rounded-full border border-white/25 px-4 py-1 text-sm text-blue-100">
-            Nền tảng thi trực tuyến
-          </p>
-          <h1 className="max-w-xl text-5xl font-bold leading-tight">
-            Một nơi cho việc dạy, học và đánh giá.
-          </h1>
-          <p className="mt-6 max-w-lg text-lg text-blue-100">
-            Đăng nhập để truy cập không gian làm việc phù hợp với vai trò của
-            bạn.
-          </p>
-        </div>
-        <p className="text-sm text-blue-200">
-          © {new Date().getFullYear()} ExamSpace
+    <AuthPageShell>
+      <div className="login-card">
+        <span className="eyebrow">Chào mừng trở lại</span>
+        <h2>Đăng nhập ExamSpace</h2>
+        <p className="login-intro">
+          Sử dụng email và mật khẩu tài khoản được cấp.
         </p>
-      </section>
-      <section className="flex items-center justify-center p-6 sm:p-10">
-        <div className="w-full max-w-md">
-          <div className="mb-8 flex items-center gap-3 text-xl font-bold lg:hidden">
-            <span className="rounded-xl bg-blue-600 p-2 text-white">
-              <GraduationCap />
-            </span>{' '}
-            ExamSpace
+        {account.data && !account.isError && (
+          <div className="auth-session-notice" role="status">
+            <p>
+              Bạn đang đăng nhập bằng tài khoản{' '}
+              <strong>{account.data.fullName}</strong>.
+            </p>
+            <Link href={`/dashboard/${account.data.role.toLowerCase()}`}>
+              Tiếp tục vào không gian làm việc <ArrowRight size={16} />
+            </Link>
+            <p>Chỉ nhập thông tin bên dưới nếu muốn đổi tài khoản.</p>
           </div>
-          <Card className="p-7 sm:p-9">
-            <div className="mb-8">
-              <div className="mb-5 inline-flex rounded-xl bg-blue-50 p-3 text-blue-600 dark:bg-blue-950">
-                <LockKeyhole size={22} />
-              </div>
-              <h2 className="text-2xl font-bold">Chào mừng trở lại</h2>
-              <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-                Nhập tài khoản được cấp để tiếp tục.
-              </p>
-            </div>
-            <form
-              method="post"
-              action="/login/unavailable"
-              onSubmit={onSubmit}
-              className="space-y-5"
-              noValidate
+        )}
+        <form
+          method="post"
+          action="/login/unavailable"
+          onSubmit={onSubmit}
+          noValidate
+          aria-busy={isSubmitting}
+        >
+          <noscript>
+            <p role="alert" className="auth-error">
+              Vui lòng bật JavaScript để đăng nhập an toàn.
+            </p>
+          </noscript>
+          <fieldset disabled={!ready || isSubmitting}>
+            <legend className="role-choice-label">
+              Không gian bạn muốn tìm hiểu
+            </legend>
+            <div
+              className="role-choices"
+              role="group"
+              aria-label="Giới thiệu vai trò"
             >
-              <noscript>
-                <p role="alert">
-                  Vui lòng bật JavaScript để đăng nhập an toàn.
-                </p>
-              </noscript>
-              <fieldset disabled={!ready || isSubmitting} className="space-y-5">
-                <div>
-                  <label
-                    htmlFor="email"
-                    className="mb-2 block text-sm font-medium"
-                  >
-                    Email
-                  </label>
-                  <Input
-                    id="email"
-                    type="email"
-                    autoComplete="username"
-                    placeholder="ten@congty.vn"
-                    {...register('email')}
-                    aria-invalid={!!errors.email}
-                  />
-                  <p className="mt-1 text-sm text-red-600">
-                    {errors.email?.message}
-                  </p>
-                </div>
-                <div>
-                  <label
-                    htmlFor="password"
-                    className="mb-2 block text-sm font-medium"
-                  >
-                    Mật khẩu
-                  </label>
-                  <Input
-                    id="password"
-                    type="password"
-                    autoComplete="current-password"
-                    placeholder="Nhập mật khẩu"
-                    {...register('password')}
-                    aria-invalid={!!errors.password}
-                  />
-                  <p className="mt-1 text-sm text-red-600">
-                    {errors.password?.message}
-                  </p>
-                </div>
-                {serverError && (
-                  <p
-                    role="alert"
-                    className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300"
-                  >
-                    {serverError}
-                  </p>
-                )}
-                <Button
-                  className="w-full"
-                  type="submit"
-                  disabled={isSubmitting}
+              {roles.map(({ id, name, Icon }) => (
+                <button
+                  type="button"
+                  key={id}
+                  aria-pressed={selected === id}
+                  onClick={() => setSelected(id)}
                 >
-                  {isSubmitting ? (
-                    'Đang đăng nhập...'
-                  ) : (
-                    <>
-                      Đăng nhập <ArrowRight size={16} />
-                    </>
-                  )}
-                </Button>
-              </fieldset>
-            </form>
-          </Card>
-          <p className="mt-6 text-center text-sm text-slate-500">
-            Liên hệ quản trị viên nếu bạn cần tài khoản.
-          </p>
-        </div>
-      </section>
-    </main>
+                  <Icon size={19} aria-hidden="true" />
+                  <span>{name}</span>
+                </button>
+              ))}
+            </div>
+            <p className="role-hint" id="role-hint">
+              {selected === 'student'
+                ? 'Làm bài được giao và xem kết quả cá nhân.'
+                : selected === 'teacher'
+                  ? 'Soạn đề, giao bài và theo dõi lớp phụ trách.'
+                  : 'Quản lý tài khoản, lớp học và bài kiểm tra.'}{' '}
+              Vai trò truy cập được xác định từ tài khoản.
+            </p>
+            <div className="login-field">
+              <label htmlFor="email">Email</label>
+              <Input
+                id="email"
+                type="email"
+                autoComplete="username"
+                placeholder="ban@truong.edu.vn"
+                {...register('email')}
+                aria-invalid={!!errors.email}
+                aria-describedby={errors.email ? 'email-error' : undefined}
+              />
+              {errors.email && (
+                <p id="email-error" className="field-error" role="alert">
+                  {errors.email.message}
+                </p>
+              )}
+            </div>
+            <div className="login-field">
+              <label htmlFor="password">Mật khẩu</label>
+              <div className="password-field">
+                <Input
+                  id="password"
+                  type={visible ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  placeholder="Nhập mật khẩu"
+                  {...register('password')}
+                  aria-invalid={!!errors.password}
+                  aria-describedby={
+                    errors.password ? 'password-error' : undefined
+                  }
+                />
+                <button
+                  type="button"
+                  aria-label={visible ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                  aria-pressed={visible}
+                  onClick={() => setVisible(!visible)}
+                >
+                  {visible ? <EyeOff size={20} /> : <Eye size={20} />}
+                </button>
+              </div>
+              {errors.password && (
+                <p id="password-error" className="field-error" role="alert">
+                  {errors.password.message}
+                </p>
+              )}
+            </div>
+            {serverError && (
+              <p role="alert" className="auth-error">
+                {serverError}
+              </p>
+            )}
+            <Button
+              type="submit"
+              className="login-submit"
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? (
+                'Đang đăng nhập...'
+              ) : (
+                <>
+                  Đăng nhập <ArrowRight size={18} />
+                </>
+              )}
+            </Button>
+            <p className="login-help">
+              Cần tài khoản hoặc quên mật khẩu? Liên hệ quản trị viên phụ trách.
+            </p>
+          </fieldset>
+        </form>
+        <p role="status" className="sr-only">
+          {isSubmitting ? 'Đang xác thực tài khoản' : ''}
+        </p>
+      </div>
+    </AuthPageShell>
   );
 }

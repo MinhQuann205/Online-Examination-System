@@ -13,6 +13,19 @@ import {
   type DragEndEvent,
 } from '@dnd-kit/core';
 import Link from 'next/link';
+import {
+  Clock3,
+  Flag,
+  ListChecks,
+  ArrowLeft,
+  ArrowRight,
+  CheckCircle2,
+} from 'lucide-react';
+import { BackButton, usePageNavigation } from './back-navigation';
+import { ThemeToggle } from './theme-toggle';
+import { WorkspaceDialog } from './exam-workspace-dialog';
+import './exam-workspace.css';
+import { registerExamGuard } from '@/lib/exam-session-guard';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useMutation, useQuery } from '@tanstack/react-query';
@@ -66,10 +79,10 @@ function DroppableMatchRow({
   return (
     <div
       ref={setNodeRef}
-      className={`flex min-h-12 items-center justify-between gap-3 rounded-lg border p-3 ${isOver ? 'border-blue-500 bg-blue-50 dark:bg-blue-950' : 'border-slate-200 dark:border-slate-700'}`}
+      className={`flex min-h-12 items-center justify-between gap-3 rounded-lg border p-3 ${isOver ? 'border-blue-500 bg-blue-50 dark:bg-blue-950' : 'border-line'}`}
     >
       <span className="font-medium">{pair.leftText}</span>
-      <span className="text-sm text-slate-500">
+      <span className="text-sm text-muted">
         {selected ?? 'Kéo đáp án vào đây'}
       </span>
     </div>
@@ -158,9 +171,7 @@ function MatchingAnswer({
     >
       <div className="grid gap-5 lg:grid-cols-2">
         <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase text-slate-500">
-            Cột A
-          </p>
+          <p className="text-xs font-semibold uppercase text-muted">Cột A</p>
           {pairs.map((pair) => {
             const selectedId = current.find(
               (choice) => choice.leftId === pair.id,
@@ -193,7 +204,7 @@ function MatchingAnswer({
           })}
         </div>
         <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase text-slate-500">
+          <p className="text-xs font-semibold uppercase text-muted">
             Cột B · kéo đáp án hoặc chọn từ danh sách
           </p>
           <div className="flex flex-wrap gap-2">
@@ -228,8 +239,89 @@ function AttemptForm({ attempt }: { attempt: AttemptRecord }) {
     questions: {},
   });
   const [submitError, setSubmitError] = useState('');
+  const [submitOpen, setSubmitOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [leaveTarget, setLeaveTarget] = useState<string | null>(null);
+  const [submissionUnknown, setSubmissionUnknown] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const { register, previous } = usePageNavigation();
+  const requestLeave = useCallback(
+    (target: string) => setLeaveTarget(target),
+    [],
+  );
+  const leaveState = useRef({ submitting: false, unknown: false });
+  const departureAllowed = useRef(false);
+  useEffect(() => register(requestLeave), [register, requestLeave]);
+  // The sentinel is one same-document entry per attempt mount. Capture-phase popstate
+  // keeps Next from unmounting the queue; confirmation uses a verified internal route.
+  useEffect(() => {
+    const marker = 'examspace-attempt-' + attempt.id;
+    if (history.state?.examspaceAttempt !== marker) {
+      history.pushState(
+        { ...history.state, examspaceAttempt: marker },
+        '',
+        location.href,
+      );
+    }
+    let restoring = false;
+    const pop = (event: PopStateEvent) => {
+      if (departureAllowed.current) return;
+      event.stopImmediatePropagation();
+      if (restoring) {
+        restoring = false;
+        return;
+      }
+      if (event.state?.examspaceAttempt === marker) return;
+      restoring = true;
+      history.go(1);
+      requestLeave(previous('/student/exams'));
+    };
+    const click = (event: MouseEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        event.altKey
+      )
+        return;
+      const anchor = (event.target as Element).closest?.(
+        'a[href]',
+      ) as HTMLAnchorElement | null;
+      if (
+        !anchor ||
+        anchor.target === '_blank' ||
+        anchor.hasAttribute('download')
+      )
+        return;
+      const url = new URL(anchor.href, location.href);
+      if (
+        url.origin === location.origin &&
+        url.pathname === location.pathname &&
+        url.search === location.search
+      )
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      requestLeave(
+        url.origin === location.origin && url.pathname.startsWith('/student/')
+          ? url.pathname
+          : '/student/exams',
+      );
+    };
+    window.addEventListener('popstate', pop, true);
+    document.addEventListener('click', click, true);
+    return () => {
+      window.removeEventListener('popstate', pop, true);
+      document.removeEventListener('click', click, true);
+    };
+  }, [attempt.id, previous, requestLeave]);
   const [submitting, setSubmitting] = useState(false);
   const finishing = useRef(false);
+  useEffect(() => {
+    leaveState.current = { submitting, unknown: submissionUnknown };
+  }, [submitting, submissionUnknown]);
   const [seconds, setSeconds] = useState(0);
   const [clockReady, setClockReady] = useState(false);
   const autosave = useRef<AnswerAutosave<Answer> | null>(null);
@@ -250,6 +342,33 @@ function AttemptForm({ attempt }: { attempt: AttemptRecord }) {
     },
     onSuccess: (result) => setReviewIds(result.reviewQuestionIds),
   });
+
+  useEffect(() => {
+    if (attempt.status !== 'IN_PROGRESS') return;
+    const message =
+      save.state === 'saved'
+        ? 'Phòng thi đang mở. Hãy rời hoặc đóng phòng thi trước khi đăng xuất.'
+        : 'Bài làm còn câu trả lời chưa được xác nhận lưu. Hãy xử lý trạng thái lưu trước khi rời phòng thi và đăng xuất.';
+    const unregister = registerExamGuard(() => message);
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (
+        !departureAllowed.current &&
+        (save.state !== 'saved' ||
+          save.hasConflict ||
+          review.isPending ||
+          finishing.current ||
+          leaveState.current.unknown)
+      ) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+    return () => {
+      unregister();
+      window.removeEventListener('beforeunload', beforeUnload);
+    };
+  }, [attempt.status, save.state, save.hasConflict, review.isPending]);
 
   useEffect(() => {
     const queue = new AnswerAutosave<Answer>(
@@ -273,7 +392,8 @@ function AttemptForm({ attempt }: { attempt: AttemptRecord }) {
   }, [attempt.id]);
 
   const changeAnswer = (questionId: string, answer: Answer) => {
-    if (finishing.current) return;
+    if (finishing.current || submissionUnknown || (clockReady && seconds === 0))
+      return;
     setAnswers((current) => ({ ...current, [questionId]: answer }));
     autosave.current?.edit(questionId, answer);
   };
@@ -296,29 +416,64 @@ function AttemptForm({ attempt }: { attempt: AttemptRecord }) {
     }
   };
 
+  const checkStatus = useCallback(async () => {
+    setChecking(true);
+    try {
+      const current = await api.attempt(attempt.id);
+      if (current.status !== 'IN_PROGRESS') {
+        departureAllowed.current = true;
+        router.replace('/student/results/' + attempt.id);
+        return true;
+      }
+      setSubmissionUnknown(false);
+      return false;
+    } catch {
+      setSubmitError(
+        'Chưa xác nhận trạng thái với máy chủ. Bản nháp vẫn ở trang này; kiểm tra kết nối rồi thử lại.',
+      );
+      return null;
+    } finally {
+      setChecking(false);
+    }
+  }, [attempt.id, router]);
   const finish = useCallback(async () => {
-    if (finishing.current) return;
+    if (finishing.current || submissionUnknown) return;
     finishing.current = true;
     setSubmitting(true);
     setSubmitError('');
+    let sent = false;
     try {
       if (!autosave.current) throw new Error('Bài làm chưa sẵn sàng.');
       await autosave.current.flush();
-      await api.submitAttempt(attempt.id);
-      router.push(`/student/results/${attempt.id}`);
+      sent = true;
+      const response = await api.submitAttempt(attempt.id);
+      if (response.status === 'IN_PROGRESS')
+        throw new Error('Máy chủ chưa xác nhận kết thúc bài làm.');
+      departureAllowed.current = true;
+      router.replace('/student/results/' + attempt.id);
     } catch (error) {
-      const current = await api.attempt(attempt.id).catch(() => null);
-      if (current && current.status !== 'IN_PROGRESS') {
-        router.push(`/student/results/${attempt.id}`);
-        return;
-      }
-      setSubmitError(
-        error instanceof Error ? error.message : 'Không thể nộp bài.',
-      );
+      if (sent) {
+        setSubmissionUnknown(true);
+        const state = await checkStatus();
+        if (state === true) return;
+        if (state === null)
+          setSubmitError(
+            'Chưa xác nhận kết quả nộp bài. Không đóng trang hoặc nộp lặp; hãy kiểm tra trạng thái máy chủ.',
+          );
+        else
+          setSubmitError(
+            'Máy chủ vẫn ghi nhận bài đang làm. Có thể thử nộp lại.',
+          );
+      } else
+        setSubmitError(
+          error instanceof Error
+            ? error.message
+            : 'Không thể lưu câu trả lời trước khi nộp.',
+        );
       finishing.current = false;
       setSubmitting(false);
     }
-  }, [attempt.id, router]);
+  }, [attempt.id, router, checkStatus, submissionUnknown]);
 
   useEffect(() => {
     const update = () => {
@@ -344,9 +499,9 @@ function AttemptForm({ attempt }: { attempt: AttemptRecord }) {
   useEffect(() => {
     if (!clockReady || seconds !== 0 || attempt.status !== 'IN_PROGRESS')
       return;
-    const timer = setTimeout(() => void finish(), 0);
+    const timer = setTimeout(() => void checkStatus(), 0);
     return () => clearTimeout(timer);
-  }, [attempt.status, clockReady, finish, seconds]);
+  }, [attempt.status, clockReady, checkStatus, seconds]);
 
   const questions = [...attempt.snapshot.questions].sort(
     (a, b) => a.position - b.position,
@@ -373,258 +528,540 @@ function AttemptForm({ attempt }: { attempt: AttemptRecord }) {
     setCurrentQuestion(index);
     document
       .getElementById(`question-${questions[index].questionId}`)
-      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      ?.focus({ preventScroll: true });
+    document
+      .getElementById(`question-${questions[index].questionId}`)
+      ?.scrollIntoView({
+        behavior: matchMedia('(prefers-reduced-motion: reduce)').matches
+          ? 'auto'
+          : 'smooth',
+        block: 'start',
+      });
   };
   const minutes = Math.floor(seconds / 60)
     .toString()
     .padStart(2, '0');
   const remainder = (seconds % 60).toString().padStart(2, '0');
 
-  return (
-    <main className="mx-auto max-w-5xl space-y-5 p-4 pb-28 sm:p-8">
-      <header className="sticky top-0 z-20 -mx-4 flex flex-wrap items-center justify-between gap-3 border-b bg-white/95 px-4 py-3 backdrop-blur dark:bg-slate-950/95 sm:-mx-8 sm:px-8">
-        <div>
-          <h1 className="font-semibold">{attempt.snapshot.title}</h1>
-          <p className="text-xs text-slate-500">
-            {answeredCount}/{questions.length} câu đã trả lời
-          </p>
-        </div>
-        <div
-          className={`rounded-lg px-3 py-2 font-mono text-lg font-bold ${seconds < 60 ? 'bg-red-100 text-red-700' : 'bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300'}`}
-          aria-label="Thời gian còn lại"
-          aria-live="polite"
-        >
-          {minutes}:{remainder}
-        </div>
-      </header>
-
-      {attempt.snapshot.description && (
-        <p className="text-sm text-slate-500">{attempt.snapshot.description}</p>
-      )}
-      {save.state === 'saving' && (
-        <p role="status" className="text-sm text-blue-700">
-          Đang lưu câu trả lời…
-        </p>
-      )}
-      {save.state === 'saved' && (
-        <p role="status" className="text-sm text-emerald-700">
-          Đã lưu trên máy chủ
-        </p>
-      )}
-      {save.state === 'error' && (
-        <div
-          role="alert"
-          className="flex flex-wrap items-center gap-3 text-sm text-red-600"
-        >
-          <span>{save.message || 'Lưu câu trả lời thất bại.'}</span>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void retryAnswers()}
-          >
-            Thử lưu lại
-          </Button>
-        </div>
-      )}
-
-      {submitError && (
-        <p role="alert" className="text-sm text-red-600">
-          {submitError}
-        </p>
-      )}
-      <section
-        aria-label="Tiến độ làm bài"
-        className="space-y-3 rounded-xl border p-4"
-      >
-        <p>
-          {answeredCount} câu đã trả lời · {questions.length - answeredCount}{' '}
-          câu chưa trả lời · Đang xem câu {currentQuestion + 1}
-        </p>
-        <progress
-          aria-label="Tiến độ trả lời"
-          max={questions.length}
-          value={answeredCount}
-          className="h-3 w-full"
-        />
-        <nav aria-label="Điều hướng câu hỏi" className="flex flex-wrap gap-2">
-          {questions.map((question, index) => (
-            <Button
-              key={question.questionId}
-              type="button"
-              variant="outline"
-              aria-current={index === currentQuestion ? 'step' : undefined}
-              onClick={() => navigate(index)}
-              aria-label={`Đến câu ${index + 1}: ${isAnswered(question.questionId) ? 'đã trả lời' : 'chưa trả lời'}${reviewIds.includes(question.questionId) ? ', cần xem lại' : ''}`}
-            >
-              {index + 1}
-              {reviewIds.includes(question.questionId) ? ' ★' : ''}
-            </Button>
-          ))}
-        </nav>
-        <div className="flex gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            disabled={currentQuestion === 0}
-            onClick={() => navigate(currentQuestion - 1)}
-          >
-            Câu trước
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={currentQuestion === questions.length - 1}
-            onClick={() => navigate(currentQuestion + 1)}
-          >
-            Câu sau
-          </Button>
-        </div>
-        {review.error && (
-          <p role="alert" className="text-red-600">
-            {review.error.message}
-          </p>
-        )}
-      </section>
-      <fieldset disabled={submitting} className="space-y-4">
+  const pendingCount = Object.values(save.questions).filter(
+    (q) => q.editVersion > q.confirmedVersion,
+  ).length;
+  const errorCount = Object.values(save.questions).filter(
+    (q) => q.phase === 'ERROR',
+  ).length;
+  const editLocked =
+    submitting || submissionUnknown || (clockReady && seconds === 0);
+  const palette = () => (
+    <>
+      <h2>Mục lục câu hỏi</h2>
+      <nav aria-label="Điều hướng câu hỏi" className="exam-question-grid">
         {questions.map((question, index) => (
-          <Card
-            id={`question-${question.questionId}`}
+          <button
             key={question.questionId}
-            className="scroll-mt-32 space-y-4 p-4 sm:p-6"
+            type="button"
+            data-answered={isAnswered(question.questionId)}
+            data-review={reviewIds.includes(question.questionId)}
+            aria-current={index === currentQuestion ? 'step' : undefined}
+            aria-label={`Đến câu ${index + 1}: ${isAnswered(question.questionId) ? 'đã trả lời' : 'chưa trả lời'}${reviewIds.includes(question.questionId) ? ', cần xem lại' : ''}`}
+            onClick={() => {
+              setPaletteOpen(false);
+              requestAnimationFrame(() => navigate(index));
+            }}
           >
-            <div className="flex items-start justify-between gap-3">
-              <h2 className="font-semibold">
-                Câu {index + 1}. {question.content}
-              </h2>
-              <span className="shrink-0 text-xs text-slate-500">
-                {question.points} điểm
+            {index + 1}
+          </button>
+        ))}
+      </nav>
+      <p className="exam-summary">
+        {answeredCount} câu đã trả lời · {questions.length - answeredCount} câu
+        chưa trả lời · {reviewIds.length} câu xem lại · Đang xem câu{' '}
+        {currentQuestion + 1}
+      </p>
+      <p className="exam-summary">
+        Đã trả lời không đồng nghĩa đã được máy chủ xác nhận lưu. ★ Cần xem lại.
+      </p>
+    </>
+  );
+  return (
+    <main className="exam-workspace">
+      <a href="#exam-questions" className="skip-link">
+        Đến câu hỏi
+      </a>
+      <header className="exam-header">
+        <div className="exam-header-inner">
+          <div>
+            <BackButton
+              fallback="/student/exams"
+              label="Quay lại danh sách bài thi"
+              onClick={() => requestLeave('/student/exams')}
+            />
+            <h1>{attempt.snapshot.title}</h1>
+            <div className="exam-meta">
+              <span>Đang làm bài</span>
+              <span>
+                {questions.length} câu · {attempt.snapshot.durationMin} phút ·
+                Phiên bản {attempt.version}
               </span>
             </div>
+          </div>
+          <div className="exam-header-actions">
+            <div
+              className={`exam-timer ${clockReady && seconds < 300 ? 'is-urgent' : ''}`}
+              role="timer"
+              aria-label="Thời gian còn lại"
+              aria-live="off"
+            >
+              <Clock3 size={22} />
+              <div>
+                <small>Thời gian còn lại</small>
+                <strong>
+                  {clockReady ? minutes + ':' + remainder : 'Đang đồng bộ'}
+                </strong>
+              </div>
+            </div>
+            <ThemeToggle />
+            <Button
+              type="button"
+              disabled={editLocked || review.isPending}
+              onClick={() => setSubmitOpen(true)}
+            >
+              {submitting ? 'Đang nộp...' : 'Nộp bài'}
+            </Button>
+          </div>
+        </div>
+        <progress
+          className="exam-progress"
+          aria-label="Tiến độ trả lời"
+          max={questions.length || 1}
+          value={answeredCount}
+        />
+      </header>
+      <div className="exam-layout">
+        <div className="exam-main">
+          <nav aria-label="Đường dẫn phòng thi" className="exam-meta">
+            <button
+              type="button"
+              onClick={() => requestLeave('/student/exams')}
+            >
+              Bài thi được giao
+            </button>
+            <span aria-hidden="true">/</span>
+            <span aria-current="page">Làm bài</span>
+          </nav>
+          {attempt.snapshot.description && (
+            <p className="exam-summary">{attempt.snapshot.description}</p>
+          )}
+          <div className="exam-save-box" data-state={save.state}>
+            <p role={save.state === 'error' ? 'alert' : 'status'}>
+              {save.state === 'saved'
+                ? 'Đã lưu trên máy chủ'
+                : save.state === 'saving'
+                  ? 'Đang lưu câu trả lời…'
+                  : save.hasConflict
+                    ? 'Xung đột phiên bản (409). ' + save.message
+                    : 'Lỗi lưu. ' + save.message}
+            </p>
+            <p>
+              {pendingCount} câu trả lời chưa được xác nhận · {errorCount} lỗi
+              lưu
+            </p>
+            {save.state === 'error' && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={submitting || submissionUnknown}
+                onClick={() => void retryAnswers()}
+              >
+                Thử lưu lại
+              </Button>
+            )}
+          </div>
+          {clockReady && seconds <= 300 && (
+            <p role="status" className="exam-notice">
+              {seconds === 0
+                ? 'Đã đến hạn theo đồng hồ thiết bị. Đang chờ máy chủ xác nhận trạng thái; không thể sửa thêm.'
+                : seconds <= 60
+                  ? 'Còn dưới một phút. Hãy kiểm tra trạng thái lưu.'
+                  : 'Còn dưới năm phút làm bài.'}
+            </p>
+          )}
+          {(submitError || submissionUnknown) && (
+            <div className="exam-notice" role="alert">
+              <p>{submitError}</p>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={checking}
+                onClick={() => void checkStatus()}
+              >
+                {checking ? 'Đang kiểm tra...' : 'Kiểm tra trạng thái máy chủ'}
+              </Button>
+            </div>
+          )}
+          <div className="exam-controls">
             <Button
               type="button"
               variant="outline"
-              disabled={review.isPending}
-              aria-pressed={reviewIds.includes(question.questionId)}
-              onClick={() =>
-                review.mutate({
-                  questionId: question.questionId,
-                  marked: !reviewIds.includes(question.questionId),
-                })
-              }
+              disabled={currentQuestion === 0}
+              onClick={() => navigate(currentQuestion - 1)}
             >
-              {reviewIds.includes(question.questionId)
-                ? 'Bỏ đánh dấu xem lại'
-                : 'Đánh dấu xem lại'}
+              <ArrowLeft size={17} />
+              Câu trước
             </Button>
-            {question.type === 'SINGLE_CHOICE' && (
-              <div className="space-y-2">
-                {question.options.map((option) => {
-                  const selected = answers[question.questionId];
-                  return (
-                    <label
-                      key={option.id}
-                      className="flex min-h-12 cursor-pointer items-center gap-3 rounded-lg border p-3 hover:bg-slate-50 dark:hover:bg-slate-900"
-                    >
-                      <input
-                        type="radio"
-                        name={question.questionId}
-                        checked={Boolean(
-                          selected &&
-                          'optionId' in selected &&
-                          selected.optionId === option.id,
-                        )}
-                        onChange={() =>
-                          changeAnswer(question.questionId, {
-                            optionId: option.id,
-                          })
-                        }
-                      />
-                      {option.content}
-                    </label>
-                  );
-                })}
-              </div>
-            )}
-            {question.type === 'MULTIPLE_CHOICE' && (
-              <div className="space-y-2">
-                {question.options.map((option) => {
-                  const value = answers[question.questionId];
-                  const selected =
-                    value && 'optionIds' in value ? value.optionIds : [];
-                  return (
-                    <label
-                      key={option.id}
-                      className="flex min-h-12 cursor-pointer items-center gap-3 rounded-lg border p-3 hover:bg-slate-50 dark:hover:bg-slate-900"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selected.includes(option.id)}
-                        onChange={(event) =>
-                          changeAnswer(question.questionId, {
-                            optionIds: event.target.checked
-                              ? [...selected, option.id]
-                              : selected.filter((id) => id !== option.id),
-                          })
-                        }
-                      />
-                      {option.content}
-                    </label>
-                  );
-                })}
-              </div>
-            )}
-            {question.type === 'MATCHING' && (
-              <MatchingAnswer
-                question={question}
-                answer={answers[question.questionId]}
-                onChange={(value) => changeAnswer(question.questionId, value)}
-              />
-            )}
-          </Card>
-        ))}
-      </fieldset>
-
-      <footer className="fixed inset-x-0 bottom-0 z-20 flex items-center justify-between gap-4 border-t bg-white/95 px-4 py-3 backdrop-blur dark:bg-slate-950/95 sm:px-8">
-        <p className="hidden text-sm text-slate-500 sm:block">
-          Lượt làm được khôi phục từ dữ liệu đã lưu trên máy chủ.
-        </p>
-        <Button
-          type="button"
-          className="ml-auto"
-          disabled={submitting || attempt.status !== 'IN_PROGRESS'}
-          onClick={() => {
-            if (window.confirm('Bạn chắc chắn muốn nộp bài?')) void finish();
+            <Button
+              type="button"
+              className="exam-mobile-palette"
+              variant="outline"
+              onClick={() => setPaletteOpen(true)}
+            >
+              <ListChecks size={17} />
+              Mục lục câu hỏi
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={currentQuestion === questions.length - 1}
+              onClick={() => navigate(currentQuestion + 1)}
+            >
+              Câu sau
+              <ArrowRight size={17} />
+            </Button>
+          </div>
+          {review.error && <p role="alert">{review.error.message}</p>}
+          <fieldset disabled={editLocked} id="exam-questions">
+            <legend className="sr-only">Câu hỏi và câu trả lời</legend>
+            {questions.map((question, index) => (
+              <Card
+                id={`question-${question.questionId}`}
+                key={question.questionId}
+                tabIndex={-1}
+                data-current={index === currentQuestion}
+                className="exam-question-card"
+              >
+                <div className="exam-question-heading">
+                  <span className="exam-question-tag">
+                    Câu {index + 1} ·{' '}
+                    {question.type === 'SINGLE_CHOICE'
+                      ? 'Một đáp án'
+                      : question.type === 'MULTIPLE_CHOICE'
+                        ? 'Nhiều đáp án'
+                        : 'Ghép nối'}
+                  </span>
+                  <span className="exam-question-points">
+                    {question.points} điểm
+                  </span>
+                </div>
+                <h2>
+                  Câu {index + 1}. {question.content}
+                </h2>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={review.isPending}
+                  aria-pressed={reviewIds.includes(question.questionId)}
+                  onClick={() =>
+                    review.mutate({
+                      questionId: question.questionId,
+                      marked: !reviewIds.includes(question.questionId),
+                    })
+                  }
+                >
+                  <Flag size={16} />
+                  {reviewIds.includes(question.questionId)
+                    ? 'Bỏ đánh dấu xem lại'
+                    : 'Đánh dấu xem lại'}
+                </Button>
+                <p className="exam-summary">
+                  {isAnswered(question.questionId)
+                    ? 'Đã trả lời'
+                    : 'Chưa trả lời'}{' '}
+                  ·{' '}
+                  {save.questions[question.questionId]?.phase === 'ERROR'
+                    ? 'Lưu thất bại'
+                    : (save.questions[question.questionId]?.editVersion ?? 0) >
+                        (save.questions[question.questionId]
+                          ?.confirmedVersion ?? 0)
+                      ? 'Chưa xác nhận lưu'
+                      : 'Đã xác nhận trạng thái trên máy chủ'}
+                </p>
+                {question.type === 'SINGLE_CHOICE' && (
+                  <div
+                    className="exam-options"
+                    role="radiogroup"
+                    aria-label={'Đáp án câu ' + (index + 1)}
+                  >
+                    {question.options.map((option) => {
+                      const selected = answers[question.questionId];
+                      const checked = Boolean(
+                        selected &&
+                        'optionId' in selected &&
+                        selected.optionId === option.id,
+                      );
+                      return (
+                        <label key={option.id} className="exam-option">
+                          <input
+                            type="radio"
+                            name={question.questionId}
+                            checked={checked}
+                            onChange={() =>
+                              changeAnswer(question.questionId, {
+                                optionId: option.id,
+                              })
+                            }
+                          />
+                          <span>{option.content}</span>
+                          {checked && (
+                            <CheckCircle2 size={20} aria-hidden="true" />
+                          )}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+                {question.type === 'MULTIPLE_CHOICE' && (
+                  <div
+                    className="exam-options"
+                    role="group"
+                    aria-label={'Đáp án câu ' + (index + 1)}
+                  >
+                    {question.options.map((option) => {
+                      const value = answers[question.questionId],
+                        selected =
+                          value && 'optionIds' in value ? value.optionIds : [];
+                      return (
+                        <label key={option.id} className="exam-option">
+                          <input
+                            type="checkbox"
+                            checked={selected.includes(option.id)}
+                            onChange={(e) =>
+                              changeAnswer(question.questionId, {
+                                optionIds: e.target.checked
+                                  ? [...selected, option.id]
+                                  : selected.filter((id) => id !== option.id),
+                              })
+                            }
+                          />
+                          <span>{option.content}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+                {question.type === 'MATCHING' && (
+                  <MatchingAnswer
+                    question={question}
+                    answer={answers[question.questionId]}
+                    onChange={(value) =>
+                      changeAnswer(question.questionId, value)
+                    }
+                  />
+                )}
+              </Card>
+            ))}
+          </fieldset>
+          <div className="exam-controls">
+            <span className="exam-summary">
+              Rời trang không nộp bài. Chỉ dữ liệu được máy chủ xác nhận mới
+              được khôi phục.
+            </span>
+            <BackButton
+              fallback="/student/exams"
+              label="Rời phòng thi"
+              onClick={() => requestLeave('/student/exams')}
+            />
+          </div>
+        </div>
+        <aside className="exam-sidebar">
+          <section className="exam-palette" aria-label="Tiến độ làm bài">
+            {palette()}
+          </section>
+          <div className="exam-notice">
+            <strong>Lưu ý khi làm bài</strong>
+            <p className="exam-summary">
+              Đáp án được tự động gửi khi bạn chỉnh sửa. Giữ trang mở nếu đang
+              lưu hoặc có lỗi. Thời hạn và kết quả do máy chủ quyết định.
+            </p>
+          </div>
+        </aside>
+      </div>
+      {paletteOpen && (
+        <WorkspaceDialog
+          title="Mục lục câu hỏi"
+          onClose={() => setPaletteOpen(false)}
+        >
+          {palette()}
+          <Button
+            type="button"
+            autoFocus
+            variant="outline"
+            onClick={() => setPaletteOpen(false)}
+          >
+            Đóng mục lục
+          </Button>
+        </WorkspaceDialog>
+      )}
+      {submitOpen && (
+        <WorkspaceDialog
+          title="Xác nhận nộp bài?"
+          onClose={() => {
+            if (!submitting) setSubmitOpen(false);
           }}
         >
-          {submitting ? 'Đang nộp...' : 'Nộp bài'}
-        </Button>
-      </footer>
+          <p>
+            {questions.length} câu · {questions.length - answeredCount} chưa trả
+            lời · {reviewIds.length} đánh dấu xem lại.
+          </p>
+          <p>
+            {pendingCount} câu chưa xác nhận lưu · {errorCount} lỗi ·{' '}
+            {save.hasConflict
+              ? 'Có xung đột phiên bản'
+              : 'Không có xung đột đã ghi nhận'}
+            .
+          </p>
+          <p>
+            {submissionUnknown
+              ? 'Kết quả nộp chưa xác nhận. Hãy kiểm tra máy chủ trước khi thử lại.'
+              : save.state === 'error'
+                ? 'Chưa xác nhận kết nối/lưu. Xử lý lỗi trước khi nộp.'
+                : 'Hệ thống sẽ chờ máy chủ xác nhận mọi đáp án trước khi gửi yêu cầu nộp.'}
+          </p>
+          {submitError && <p role="alert">{submitError}</p>}
+          <div className="dialog-actions">
+            <Button
+              type="button"
+              variant="outline"
+              autoFocus
+              disabled={submitting}
+              onClick={() => setSubmitOpen(false)}
+            >
+              Tiếp tục làm bài
+            </Button>
+            {submissionUnknown ? (
+              <Button
+                type="button"
+                disabled={checking}
+                onClick={() => void checkStatus()}
+              >
+                Kiểm tra trạng thái máy chủ
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                disabled={submitting || save.hasConflict || review.isPending}
+                onClick={() => void finish()}
+              >
+                {submitting ? 'Đang nộp...' : 'Xác nhận nộp bài'}
+              </Button>
+            )}
+          </div>
+        </WorkspaceDialog>
+      )}
+      {leaveTarget && (
+        <WorkspaceDialog
+          title="Rời phòng thi?"
+          onClose={() => setLeaveTarget(null)}
+        >
+          <p>
+            Bài thi chưa được nộp. Rời trang không nộp hoặc hủy lượt làm; thời
+            hạn vẫn tiếp tục.
+          </p>
+          <p>
+            {submitting
+              ? 'Đang nộp bài; hãy đợi máy chủ xác nhận trước khi rời trang.'
+              : submissionUnknown
+                ? 'Kết quả nộp chưa xác nhận. Kiểm tra trạng thái trước khi rời trang.'
+                : review.isPending
+                  ? 'Đang lưu đánh dấu xem lại; hãy đợi máy chủ xác nhận trước khi rời trang.'
+                  : save.hasConflict
+                    ? 'Đang có xung đột phiên bản. Lựa chọn local chưa được xác nhận.'
+                    : save.state === 'saving'
+                      ? 'Có câu trả lời đang chờ lưu. Rời trang có thể làm mất các thay đổi chưa được xác nhận.'
+                      : save.state === 'error'
+                        ? 'Có câu trả lời lưu thất bại. Rời trang có thể làm mất bản nháp chưa được xác nhận.'
+                        : 'Các câu trả lời hiện tại đã được máy chủ xác nhận lưu.'}
+          </p>
+          <div className="dialog-actions">
+            <Button
+              type="button"
+              variant="outline"
+              autoFocus
+              onClick={() => setLeaveTarget(null)}
+            >
+              Ở lại phòng thi
+            </Button>
+            {save.state === 'error' && (
+              <Button
+                type="button"
+                disabled={submitting || submissionUnknown}
+                variant="outline"
+                onClick={() => void retryAnswers()}
+              >
+                Thử lưu lại
+              </Button>
+            )}
+            <Button
+              type="button"
+              disabled={submitting || submissionUnknown || review.isPending}
+              onClick={() => {
+                if (
+                  leaveState.current.submitting ||
+                  leaveState.current.unknown ||
+                  review.isPending
+                )
+                  return;
+                departureAllowed.current = true;
+                router.replace(leaveTarget);
+              }}
+            >
+              Tôi hiểu, rời phòng thi
+            </Button>
+          </div>
+        </WorkspaceDialog>
+      )}
     </main>
   );
 }
 
 export function AttemptPage({ attemptId }: { attemptId: string }) {
   const router = useRouter();
-  const session = useQuery({ queryKey: ['me'], queryFn: api.me, retry: false });
+  const session = useQuery({
+    queryKey: ['me'],
+    queryFn: api.me,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
   const attempt = useQuery({
     queryKey: ['attempt', attemptId],
     queryFn: () => api.attempt(attemptId),
     enabled: session.data?.role === 'STUDENT',
     retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    staleTime: 0,
+    gcTime: 0,
   });
   useEffect(() => {
     if (session.isError) router.replace('/login');
     if (session.data && session.data.role !== 'STUDENT')
       router.replace(`/dashboard/${session.data.role.toLowerCase()}`);
   }, [router, session.data, session.isError]);
-  if (session.isPending || attempt.isPending)
+  if (session.isError || (session.data && session.data.role !== 'STUDENT'))
     return (
-      <main className="p-8 text-slate-500">Đang khôi phục bài làm...</main>
+      <main role="alert" className="p-8">
+        Không thể xác nhận quyền truy cập phòng thi.
+      </main>
     );
+  if (session.isPending || attempt.isPending)
+    return <main className="p-8 text-muted">Đang khôi phục bài làm...</main>;
   if (attempt.isError)
     return (
       <main role="alert" className="p-8 text-red-600">
         {attempt.error.message}
+        <Button type="button" onClick={() => void attempt.refetch()}>
+          Thử lại
+        </Button>
+        <BackButton fallback="/student/exams" />
       </main>
     );
   if (attempt.data.status !== 'IN_PROGRESS')
@@ -632,6 +1069,7 @@ export function AttemptPage({ attemptId }: { attemptId: string }) {
       <main className="mx-auto max-w-2xl p-8">
         <Card className="space-y-4 p-6">
           <h1 className="text-xl font-bold">Lượt làm bài đã kết thúc</h1>
+          <BackButton fallback="/student/exams" />
           <Link
             href={`/student/results/${attemptId}`}
             className="text-blue-700 hover:underline"

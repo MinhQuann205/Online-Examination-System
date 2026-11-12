@@ -1,4 +1,4 @@
-import { Management } from '@/components/management';
+import { TeacherQuestions } from '@/components/teacher/teacher-questions';
 export default function Page() {
-  return <Management kind="questions" />;
+  return <TeacherQuestions />;
 }

@@ -113,11 +113,24 @@ for (const width of [390, 768, 1024, 1440]) {
         }));
         evidence.push({ route, overflow, violations: audit });
         if (route === '/login') {
+          // Public navigation and a skip link now precede the login form.
           await page.keyboard.press('Tab');
+          assert.equal(
+            await page.locator(':focus').textContent(),
+            'Đến nội dung đăng nhập',
+          );
+          await page.keyboard.press('Enter');
+          const email = page.getByLabel('Email', { exact: true });
+          for (
+            let index = 0;
+            index < 12 &&
+            !(await email.evaluate((el) => el === document.activeElement));
+            index++
+          )
+            await page.keyboard.press('Tab');
           assert(
-            await page
-              .getByLabel('Email', { exact: true })
-              .evaluate((el) => el === document.activeElement),
+            await email.evaluate((el) => el === document.activeElement),
+            'Email remains keyboard reachable after the skip link',
           );
         }
         if (route === '/dashboard/admin' && width < 1024) {
@@ -133,7 +146,9 @@ for (const width of [390, 768, 1024, 1440]) {
         await c.close();
       }
     }
-    const dir = path.join(os.tmpdir(), 'examspace-p2-20261029');
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'examspace-ui-viewport-'),
+    );
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       path.join(dir, `viewport-${width}.json`),
@@ -216,11 +231,7 @@ async function workspace(mobile = false) {
 const saved = (page) =>
   page.getByText('Đã lưu trên máy chủ', { exact: true }).waitFor();
 async function select(page, question, which) {
-  const card = page
-    .locator('h2')
-    .filter({ hasText: question.content })
-    .locator('..')
-    .locator('..');
+  const card = page.locator('#question-' + question.questionId);
   if (question.type === 'SINGLE_CHOICE')
     await card
       .getByLabel(question.options[which].content, { exact: true })
@@ -255,7 +266,8 @@ test('NT01: independent questions survive two tabs; offline same-question edit r
     await other.setOffline(false);
     await tab.getByRole('button', { name: 'Thử lưu lại', exact: true }).click();
     await tab
-      .locator('span')
+      .locator('.exam-save-box')
+      .getByRole('alert')
       .filter({ hasText: /Đáp án đã thay đổi ở phiên khác/ })
       .waitFor();
     assert.deepEqual(
@@ -343,7 +355,12 @@ test('P2 final combined UI E2E: Teacher creates 3 types, publishes/assigns; Stud
     await admin
       .getByRole('button', { name: new RegExp(`P2 final class ${suffix}`) })
       .click();
-    await admin.getByPlaceholder('ID học viên').fill(actors.studentA.id);
+    await admin
+      .getByLabel('Tìm học viên', { exact: true })
+      .fill(actors.studentA.email);
+    await admin
+      .getByLabel('Học viên cần thêm', { exact: true })
+      .selectOption(actors.studentA.id);
     const memberPosted = admin.waitForResponse(
       (r) => r.url().endsWith('/students') && r.request().method() === 'POST',
     );
@@ -359,8 +376,12 @@ test('P2 final combined UI E2E: Teacher creates 3 types, publishes/assigns; Stud
         .fill(`P2 UI ${type} ${suffix}`);
       if (type === 'MATCHING') {
         for (let i = 1; i <= 2; i++) {
-          await form.getByPlaceholder(`Vế trái ${i}`).fill(`UI Left ${i}`);
-          await form.getByPlaceholder(`Vế phải ${i}`).fill(`UI Right ${i}`);
+          await form
+            .getByPlaceholder(`Nội dung cần ghép ${i}`)
+            .fill(`UI Left ${i}`);
+          await form
+            .getByPlaceholder(`Đáp án đúng tương ứng ${i}`)
+            .fill(`UI Right ${i}`);
         }
       } else {
         await form.getByPlaceholder('Lựa chọn 1').fill(`UI ${type} A`);
@@ -475,19 +496,12 @@ test('P2 final combined UI E2E: Teacher creates 3 types, publishes/assigns; Stud
       name: exam.title,
       exact: true,
     });
-    await heading
-      .locator('..')
-      .getByText(/30 phút/)
-      .waitFor();
+    const assignedCard = heading.locator('xpath=ancestor::article');
+    await assignedCard.getByText(/30 phút/).waitFor();
     const started = student.waitForResponse(
       (r) => r.url().endsWith('/start') && r.request().method() === 'POST',
     );
-    await heading
-      .locator('..')
-      .locator('..')
-      .locator('..')
-      .getByRole('button', { name: /Bắt đầu/ })
-      .click();
+    await assignedCard.getByRole('button', { name: /Bắt đầu/ }).click();
     const attempt = await (await started).json();
     assert.equal(attempt.version, 1);
     assert(!JSON.stringify(attempt.snapshot).includes('isCorrect'));
@@ -557,6 +571,9 @@ test('P2 final combined UI E2E: Teacher creates 3 types, publishes/assigns; Stud
     assert.deepEqual(persisted.reviewQuestionIds, [matching.id]);
     student.once('dialog', (dialog) => dialog.accept());
     await student.getByRole('button', { name: 'Nộp bài', exact: true }).click();
+    await student
+      .getByRole('button', { name: 'Xác nhận nộp bài', exact: true })
+      .click();
     await student.waitForURL(`**/student/results/${attempt.id}`);
     await student.getByText('6.75 / 6.75', { exact: false }).waitFor();
     const stored = (
@@ -588,8 +605,7 @@ test('P2 final combined UI E2E: Teacher creates 3 types, publishes/assigns; Stud
       exact: true,
     });
     await examHeading
-      .locator('..')
-      .locator('..')
+      .locator('xpath=ancestor::tr')
       .getByRole('link', { name: 'Theo dõi kết quả', exact: true })
       .click();
     await admin
@@ -598,7 +614,10 @@ test('P2 final combined UI E2E: Teacher creates 3 types, publishes/assigns; Stud
       .getByText('6.75 / 6.75', { exact: true })
       .waitFor();
     fs.writeFileSync(
-      path.join(os.tmpdir(), 'examspace-p2-20261029', 'final-e2e.json'),
+      path.join(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'examspace-ui-combined-')),
+        'final-e2e.json',
+      ),
       JSON.stringify(
         {
           examId: exam.id,

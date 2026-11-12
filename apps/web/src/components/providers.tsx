@@ -1,7 +1,9 @@
 'use client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ThemeProvider } from 'next-themes';
+import { ThemeProvider } from '@/components/theme-provider';
 import { useState } from 'react';
+import { NavigationProvider } from './back-navigation';
+import { SessionChangeBoundary } from './session-change-boundary';
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [client] = useState(
@@ -11,8 +13,13 @@ export function Providers({ children }: { children: React.ReactNode }) {
       }),
   );
   return (
-    <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={client}>
+        <NavigationProvider>
+          {children}
+          <SessionChangeBoundary />
+        </NavigationProvider>
+      </QueryClientProvider>
     </ThemeProvider>
   );
 }

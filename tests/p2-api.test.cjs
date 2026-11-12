@@ -1,6 +1,5 @@
 const { test, before, after } = require('node:test');
 const fs = require('node:fs');
-const Module = require('node:module');
 const path = require('node:path');
 const {
   assert,
@@ -51,18 +50,7 @@ test('NT02: concurrent client 401s share rotation and every original request suc
   };
   try {
     process.env.NEXT_PUBLIC_API_URL = base;
-    const ts = require('typescript');
-    const file = path.resolve(__dirname, '../apps/web/src/lib/api.ts');
-    const compiled = new Module(file, module);
-    compiled._compile(
-      ts.transpileModule(fs.readFileSync(file, 'utf8'), {
-        compilerOptions: {
-          module: ts.ModuleKind.CommonJS,
-          target: ts.ScriptTarget.ES2022,
-        },
-      }).outputText,
-      file,
-    );
+    const compiled = { exports: require('./load-web-client.cjs')() };
     const { api } = compiled.exports;
     const results = await Promise.allSettled(
       Array.from({ length: 6 }, () => api.me()),
@@ -209,18 +197,7 @@ test('NT02: real expired signed access JWT is rejected; concurrent client calls 
       return r;
     };
     process.env.NEXT_PUBLIC_API_URL = endpoint;
-    const ts = require('typescript'),
-      file = path.resolve(__dirname, '../apps/web/src/lib/api.ts'),
-      compiled = new Module(file, module);
-    compiled._compile(
-      ts.transpileModule(fs.readFileSync(file, 'utf8'), {
-        compilerOptions: {
-          module: ts.ModuleKind.CommonJS,
-          target: ts.ScriptTarget.ES2022,
-        },
-      }).outputText,
-      file,
-    );
+    const compiled = { exports: require('./load-web-client.cjs')() };
     const users = await Promise.all(
       Array.from({ length: 6 }, () => compiled.exports.api.me()),
     );

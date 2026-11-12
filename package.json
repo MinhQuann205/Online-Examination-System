@@ -8,15 +8,17 @@
     "typecheck": "corepack pnpm --filter @exam/shared build && corepack pnpm --filter @exam/api typecheck && corepack pnpm --filter @exam/web typecheck",
     "lint": "corepack pnpm --recursive lint",
     "test": "corepack pnpm test:tooling && corepack pnpm --filter @exam/shared build && corepack pnpm --filter @exam/api test && corepack pnpm --filter @exam/web test",
-    "test:integration": "node --test --test-concurrency=1 tests/p0-api.test.cjs tests/p1-api.test.cjs tests/p1-migration.test.cjs tests/p2-api.test.cjs tests/git-review-api.test.cjs",
-    "test:e2e": "node --test --test-concurrency=1 tests/p0-browser.test.cjs tests/p1-browser.test.cjs tests/p2-browser.test.cjs tests/git-review-browser.test.cjs",
+    "test:integration": "node --test --test-concurrency=1 tests/p0-api.test.cjs tests/p1-api.test.cjs tests/p1-migration.test.cjs tests/p2-api.test.cjs tests/git-review-api.test.cjs tests/ui-admin-api.test.cjs tests/ui-teacher-api.test.cjs tests/ui-student-api.test.cjs tests/ui-results-api.test.cjs",
+    "test:e2e": "node --test --test-concurrency=1 tests/p0-browser.test.cjs tests/p1-browser.test.cjs tests/p2-browser.test.cjs tests/git-review-browser.test.cjs tests/ui-foundation.test.cjs tests/ui-admin.test.cjs tests/ui-teacher.test.cjs tests/ui-student.test.cjs tests/ui-workspace.test.cjs tests/ui-results.test.cjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:generate": "corepack pnpm --filter @exam/api db:generate",
     "db:migrate": "corepack pnpm --filter @exam/api db:migrate",
     "db:seed": "corepack pnpm --filter @exam/api db:seed",
     "dev:prepare": "corepack pnpm db:generate && corepack pnpm --filter @exam/shared build",
-    "test:tooling": "node --test tests/test-infrastructure.test.cjs"
+    "test:tooling": "node --test tests/test-infrastructure.test.cjs",
+    "dev:stitch": "node scripts/dev-stitch.cjs",
+    "dev:stitch:web": "node scripts/dev-stitch.cjs --web-only"
   },
   "devDependencies": {
     "prettier": "^3.6.2",

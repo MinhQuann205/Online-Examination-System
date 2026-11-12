@@ -95,11 +95,7 @@ async function workspace(mobile = false) {
 const saved = (page) =>
   page.getByText('Đã lưu trên máy chủ', { exact: true }).waitFor();
 async function select(page, question, which) {
-  const card = page
-    .locator('h2')
-    .filter({ hasText: question.content })
-    .locator('..')
-    .locator('..');
+  const card = page.locator('#question-' + question.questionId);
   if (question.type === 'SINGLE_CHOICE')
     await card
       .getByLabel(question.options[which].content, { exact: true })
@@ -174,10 +170,7 @@ for (const type of ['SINGLE_CHOICE', 'MULTIPLE_CHOICE', 'MATCHING']) {
       else
         assert(
           await x.page
-            .locator('h2')
-            .filter({ hasText: q.content })
-            .locator('..')
-            .locator('..')
+            .locator('#question-' + q.questionId)
             .getByLabel(q.options[1].content, { exact: true })
             .isChecked(),
         );
@@ -306,6 +299,10 @@ test('F02/F03: submit waits for pending autosave and grades the acknowledged ans
     x.page.once('dialog', (dialog) => dialog.accept());
     await x.page.getByRole('button', { name: 'Nộp bài', exact: true }).click();
     await x.page
+      .getByRole('button', { name: 'Xác nhận nộp bài', exact: true })
+      .click();
+    await x.page
+      .getByRole('dialog', { name: 'Xác nhận nộp bài?', exact: true })
       .getByRole('button', { name: 'Đang nộp...', exact: true })
       .waitFor();
     await sleep(250);
@@ -368,7 +365,9 @@ test('F04: hydrated login, wrong password and connection failure never leak cred
     await page.route('**/auth/login', (r) => r.abort('connectionrefused'));
     await page.getByLabel('Mật khẩu', { exact: true }).fill(password);
     await page.getByRole('button', { name: 'Đăng nhập', exact: true }).click();
-    await page.getByText(/Failed to fetch|fetch|network/i).waitFor();
+    await page
+      .getByText(/Failed to fetch|fetch|network|Không kết nối được máy chủ/i)
+      .waitFor();
     assert.equal(new URL(page.url()).pathname, '/login');
     await page.unroute('**/auth/login');
     await login(page, f.studentA);
@@ -508,8 +507,12 @@ test('main E2E: Teacher creates 3 types, publishes/assigns; Student reloads/subm
         .fill(`P0 UI ${type} ${suffix}`);
       if (type === 'MATCHING') {
         for (let i = 1; i <= 2; i++) {
-          await form.getByPlaceholder(`Vế trái ${i}`).fill(`UI Left ${i}`);
-          await form.getByPlaceholder(`Vế phải ${i}`).fill(`UI Right ${i}`);
+          await form
+            .getByPlaceholder(`Nội dung cần ghép ${i}`)
+            .fill(`UI Left ${i}`);
+          await form
+            .getByPlaceholder(`Đáp án đúng tương ứng ${i}`)
+            .fill(`UI Right ${i}`);
         }
       } else {
         await form.getByPlaceholder('Lựa chọn 1').fill(`UI ${type} A`);
@@ -625,6 +628,9 @@ test('main E2E: Teacher creates 3 types, publishes/assigns; Student reloads/subm
     assert.equal((await answers(attempt.id)).length, 3);
     student.once('dialog', (dialog) => dialog.accept());
     await student.getByRole('button', { name: 'Nộp bài', exact: true }).click();
+    await student
+      .getByRole('button', { name: 'Xác nhận nộp bài', exact: true })
+      .click();
     await student.waitForURL(`**/student/results/${attempt.id}`);
     await student.getByText('6.75 / 6.75', { exact: false }).waitFor();
     const stored = (
@@ -656,8 +662,7 @@ test('main E2E: Teacher creates 3 types, publishes/assigns; Student reloads/subm
       exact: true,
     });
     await examHeading
-      .locator('..')
-      .locator('..')
+      .locator('xpath=ancestor::tr')
       .getByRole('link', { name: 'Theo dõi kết quả', exact: true })
       .click();
     await admin
