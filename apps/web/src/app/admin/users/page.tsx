@@ -1,4 +1,4 @@
-import { Management } from '@/components/management';
+import { AdminUsers } from '@/components/admin/admin-users';
 export default function Page() {
-  return <Management kind="users" />;
+  return <AdminUsers />;
 }

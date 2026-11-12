@@ -8,6 +8,7 @@ import { api } from '@/lib/api';
 import { allPages } from '@/lib/all-pages';
 import { Pagination } from '@/components/pagination';
 import { Button } from '@/components/ui/button';
+import { ErrorState } from '@/components/teacher/teacher-ui';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 
@@ -111,9 +112,9 @@ export function ExamList() {
   });
 
   if (session.isPending || !session.data)
-    return <main className="p-8 text-slate-500">Đang xác thực phiên...</main>;
+    return <div className="p-8 text-slate-500">Đang xác thực phiên...</div>;
   return (
-    <main className="mx-auto max-w-6xl space-y-6 p-5 sm:p-8">
+    <div className="teacher-page">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-sm font-semibold text-blue-600">ExamSpace</p>
@@ -160,9 +161,7 @@ export function ExamList() {
         {exams.isPending ? (
           <p className="text-slate-500">Đang tải danh sách đề thi...</p>
         ) : exams.isError ? (
-          <p role="alert" className="text-red-600">
-            {exams.error.message}
-          </p>
+          <ErrorState error={exams.error} retry={() => void exams.refetch()} />
         ) : exams.data.items.length === 0 ? (
           <p className="text-slate-500">Chưa có đề thi phù hợp.</p>
         ) : (
@@ -233,7 +232,7 @@ export function ExamList() {
             ))}
           </ul>
         )}
-        {exams.data && (
+        {exams.data && !exams.isError && (
           <Pagination
             page={page}
             total={exams.data.total}
@@ -243,7 +242,7 @@ export function ExamList() {
           />
         )}
       </Card>
-    </main>
+    </div>
   );
 }
 
@@ -265,26 +264,21 @@ export function ExamEditor({ examId }: { examId?: string }) {
     enabled: Boolean(examId && session.data?.role === 'TEACHER'),
   });
   if (session.isPending || !session.data)
-    return <main className="p-8 text-slate-500">Đang xác thực phiên...</main>;
+    return <div className="p-8 text-slate-500">Đang xác thực phiên...</div>;
   if (examId && exam.isPending)
-    return <main className="p-8 text-slate-500">Đang tải đề thi...</main>;
+    return <div className="p-8 text-slate-500">Đang tải đề thi...</div>;
   if (examId && (exam.isError || exam.data?.status !== 'DRAFT'))
     return (
-      <main className="mx-auto max-w-4xl p-5 sm:p-8">
+      <div className="mx-auto max-w-4xl p-5 sm:p-8">
         <p role="alert" className="text-red-600">
           {exam.error?.message ??
             'Chỉ có thể chỉnh sửa đề thi ở trạng thái nháp.'}
         </p>
-        <Link
-          className="mt-4 inline-block text-blue-700 underline"
-          href="/teacher/exams"
-        >
-          Quay lại danh sách
-        </Link>
-      </main>
+      </div>
     );
   return (
     <ExamEditorForm
+      key={examId ?? 'new'}
       examId={examId}
       initialExam={exam.data as ExamRecord | undefined}
       questions={questions.data as Question[] | undefined}
@@ -308,6 +302,7 @@ function ExamEditorForm({
   questionsError?: string;
 }) {
   const router = useRouter();
+  const cache = useQueryClient();
   const [title, setTitle] = useState(() => initialExam?.title ?? '');
   const [description, setDescription] = useState(
     () => initialExam?.description ?? '',
@@ -352,7 +347,12 @@ function ExamEditorForm({
       };
       return examId ? api.updateExam(examId, body) : api.createExam(body);
     },
-    onSuccess: (saved: { id: string }) => {
+    onSuccess: async (saved: { id: string }) => {
+      await Promise.all([
+        cache.invalidateQueries({ queryKey: ['exam', saved.id] }),
+        cache.invalidateQueries({ queryKey: ['exam-preview', saved.id] }),
+        cache.invalidateQueries({ queryKey: ['exams'] }),
+      ]);
       router.push(`/teacher/exams/${saved.id}`);
       router.refresh();
     },
@@ -362,18 +362,32 @@ function ExamEditorForm({
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setNotice('');
+    if (order.length < 1 || order.length > 200) {
+      setNotice('Chọn từ 1 đến 200 câu hỏi trước khi lưu.');
+      return;
+    }
+    const cents = order.map((id) => Number(points[id]) * 100);
+    if (
+      cents.some(
+        (v) =>
+          !Number.isFinite(v) ||
+          v <= 0 ||
+          Math.abs(v - Math.round(v)) > 1e-7 ||
+          v > 99999999,
+      ) ||
+      cents.reduce((a, b) => a + Math.round(b), 0) > 99999999
+    ) {
+      setNotice(
+        'Điểm phải lớn hơn 0, tối đa hai chữ số thập phân và tổng không vượt 999999.99.',
+      );
+      return;
+    }
     save.mutate();
   }
 
   return (
-    <main className="mx-auto max-w-5xl space-y-6 p-5 sm:p-8">
+    <div className="teacher-page">
       <div>
-        <Link
-          href="/teacher/exams"
-          className="text-sm text-blue-700 hover:underline"
-        >
-          ← Danh sách đề thi
-        </Link>
         <h1 className="mt-3 text-3xl font-bold">
           {examId ? 'Chỉnh sửa đề thi' : 'Tạo đề thi'}
         </h1>
@@ -382,229 +396,250 @@ function ExamEditorForm({
         </p>
       </div>
       <form onSubmit={submit} className="space-y-6">
-        <Card className="grid gap-4 p-5 sm:grid-cols-2">
-          <label className="space-y-2 text-sm font-medium">
-            Tên đề thi
-            <Input
-              required
-              minLength={2}
-              maxLength={200}
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-            />
-          </label>
-          <label className="space-y-2 text-sm font-medium">
-            Thời lượng (phút)
-            <Input
-              type="number"
-              min={1}
-              max={1440}
-              required
-              value={durationMin}
-              onChange={(e) => setDurationMin(Number(e.target.value))}
-            />
-          </label>
-          <label className="space-y-2 text-sm font-medium sm:col-span-2">
-            Mô tả
-            <textarea
-              className="min-h-24 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm dark:border-slate-700 dark:bg-slate-900"
-              maxLength={5000}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-            />
-          </label>
-        </Card>
-        <Card className="p-5">
-          <h2 className="mb-4 text-lg font-semibold">Chọn câu hỏi</h2>
-          <Input
-            aria-label="Tìm câu hỏi để chọn"
-            value={questionSearch}
-            onChange={(event) => {
-              setQuestionSearch(event.target.value);
-              setQuestionPage(1);
-            }}
-            placeholder="Tìm câu hỏi..."
-          />
-          {questionsPending ? (
-            <p className="text-slate-500">Đang tải ngân hàng câu hỏi...</p>
-          ) : questionsError ? (
-            <p role="alert" className="text-red-600">
-              {questionsError}
-            </p>
-          ) : !questions?.length ? (
-            <p className="text-slate-500">
-              Ngân hàng chưa có câu hỏi. Hãy tạo câu hỏi trước khi soạn đề.
-            </p>
-          ) : (
-            <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-              {filteredQuestions
-                .slice((questionPage - 1) * 20, questionPage * 20)
-                .map((question) => {
-                  const selected = Object.hasOwn(points, question.id);
-                  return (
-                    <li
-                      key={question.id}
-                      className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center"
-                    >
-                      <label className="flex min-w-0 flex-1 items-start gap-3">
-                        <input
-                          type="checkbox"
-                          checked={selected}
-                          onChange={(event) => {
-                            const checked = event.target.checked;
-                            setOrder((current) =>
-                              checked
-                                ? [...current, question.id]
-                                : current.filter((id) => id !== question.id),
-                            );
-                            setPoints((current) => {
-                              const next = { ...current };
-                              if (event.target.checked) next[question.id] = '1';
-                              else delete next[question.id];
-                              return next;
-                            });
-                          }}
-                          className="mt-1 h-4 w-4 accent-blue-600"
-                        />
-                        <span className="min-w-0">
-                          <span className="block font-medium">
-                            {question.content}
-                          </span>
-                          <span className="mt-1 block text-xs text-slate-500">
-                            {typeLabels[question.type]}
-                            {question.topic ? ` · ${question.topic}` : ''}
-                          </span>
-                        </span>
-                      </label>
-                      {selected && (
-                        <label className="flex items-center gap-2 text-sm">
-                          Điểm
-                          <Input
-                            type="number"
-                            min="0.01"
-                            max="999999.99"
-                            step="0.01"
-                            required
-                            className="w-28"
-                            value={points[question.id]}
-                            onChange={(event) =>
-                              setPoints((current) => ({
-                                ...current,
-                                [question.id]: event.target.value,
-                              }))
-                            }
-                          />
-                        </label>
-                      )}
-                    </li>
-                  );
-                })}
-            </ul>
-          )}
-        </Card>
-        <Pagination
-          page={questionPage}
-          total={filteredQuestions.length}
-          pageCount={Math.ceil(filteredQuestions.length / 20)}
-          onPage={setQuestionPage}
-          busy={questionsPending}
-        />
-        <Card className="space-y-3 p-5">
-          <h2 className="font-semibold">Thứ tự câu hỏi đã chọn</h2>
-          <p role="status">
-            Tổng điểm:{' '}
-            {(
-              order.reduce(
-                (sum, id) => sum + Math.round((Number(points[id]) || 0) * 100),
-                0,
-              ) / 100
-            ).toFixed(2)}
-          </p>
-          {order.map((id, index) => (
-            <div
-              key={id}
-              className="flex flex-wrap items-center gap-2 border-t py-3"
-            >
-              <span className="min-w-0 flex-1">
-                {index + 1}.{' '}
-                {questions?.find((q) => q.id === id)?.content ?? id}
-              </span>
-              <label>
-                Điểm câu {index + 1}
+        <fieldset disabled={save.isPending} className="space-y-6">
+          <Card className="grid gap-4 p-5 sm:grid-cols-2">
+            <label className="space-y-2 text-sm font-medium">
+              Tên đề thi
+              <Input
+                required
+                minLength={2}
+                maxLength={200}
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+              />
+            </label>
+            <label className="space-y-2 text-sm font-medium">
+              Thời lượng (phút)
+              <Input
+                type="number"
+                min={1}
+                max={1440}
+                required
+                value={durationMin}
+                onChange={(e) => setDurationMin(Number(e.target.value))}
+              />
+            </label>
+            <label className="space-y-2 text-sm font-medium sm:col-span-2">
+              Mô tả
+              <textarea
+                className="min-h-24 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm dark:border-slate-700 dark:bg-slate-900"
+                maxLength={5000}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </label>
+          </Card>
+          <div className="teacher-exam-editor">
+            <section>
+              <Card className="p-5">
+                <h2 className="mb-4 text-lg font-semibold">Chọn câu hỏi</h2>
+                <p className="muted mb-4">
+                  Ngân hàng hiện tại · tối đa 200 câu. Thứ tự và điểm được lưu
+                  trong bản nháp.
+                </p>
                 <Input
-                  type="number"
-                  min="0.01"
-                  step="0.01"
-                  required
-                  value={points[id]}
-                  onChange={(event) =>
-                    setPoints((current) => ({
-                      ...current,
-                      [id]: event.target.value,
-                    }))
-                  }
+                  aria-label="Tìm câu hỏi để chọn"
+                  value={questionSearch}
+                  onChange={(event) => {
+                    setQuestionSearch(event.target.value);
+                    setQuestionPage(1);
+                  }}
+                  placeholder="Tìm câu hỏi..."
                 />
-              </label>
-              <Button
-                type="button"
-                variant="outline"
-                aria-label={`Đưa câu ${index + 1} lên`}
-                disabled={index === 0}
-                onClick={() => move(index, -1)}
-              >
-                Lên
+                {questionsPending ? (
+                  <p className="text-slate-500">
+                    Đang tải ngân hàng câu hỏi...
+                  </p>
+                ) : questionsError ? (
+                  <p role="alert" className="text-red-600">
+                    {questionsError}
+                  </p>
+                ) : !questions?.length ? (
+                  <p className="text-slate-500">
+                    Ngân hàng chưa có câu hỏi. Hãy tạo câu hỏi trước khi soạn
+                    đề.
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {filteredQuestions
+                      .slice((questionPage - 1) * 20, questionPage * 20)
+                      .map((question) => {
+                        const selected = Object.hasOwn(points, question.id);
+                        return (
+                          <li
+                            key={question.id}
+                            className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center"
+                          >
+                            <label className="flex min-w-0 flex-1 items-start gap-3">
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                onChange={(event) => {
+                                  const checked = event.target.checked;
+                                  setOrder((current) =>
+                                    checked
+                                      ? [...current, question.id]
+                                      : current.filter(
+                                          (id) => id !== question.id,
+                                        ),
+                                  );
+                                  setPoints((current) => {
+                                    const next = { ...current };
+                                    if (event.target.checked)
+                                      next[question.id] = '1';
+                                    else delete next[question.id];
+                                    return next;
+                                  });
+                                }}
+                                className="mt-1 h-4 w-4 accent-blue-600"
+                              />
+                              <span className="min-w-0">
+                                <span className="block font-medium">
+                                  {question.content}
+                                </span>
+                                <span className="mt-1 block text-xs text-slate-500">
+                                  {typeLabels[question.type]}
+                                  {question.topic ? ` · ${question.topic}` : ''}
+                                </span>
+                              </span>
+                            </label>
+                            {selected && (
+                              <label className="flex items-center gap-2 text-sm">
+                                Điểm
+                                <Input
+                                  type="number"
+                                  min="0.01"
+                                  max="999999.99"
+                                  step="0.01"
+                                  required
+                                  className="w-28"
+                                  value={points[question.id]}
+                                  onChange={(event) =>
+                                    setPoints((current) => ({
+                                      ...current,
+                                      [question.id]: event.target.value,
+                                    }))
+                                  }
+                                />
+                              </label>
+                            )}
+                          </li>
+                        );
+                      })}
+                  </ul>
+                )}
+              </Card>
+              <Pagination
+                page={questionPage}
+                total={filteredQuestions.length}
+                pageCount={Math.ceil(filteredQuestions.length / 20)}
+                onPage={setQuestionPage}
+                busy={questionsPending}
+              />
+            </section>
+            <aside className="teacher-editor-summary" aria-label="Cấu trúc đề">
+              <Card className="space-y-3 p-5">
+                <h2 className="font-semibold">Thứ tự câu hỏi đã chọn</h2>
+                <p role="status">
+                  Tổng điểm:{' '}
+                  {(
+                    order.reduce(
+                      (sum, id) =>
+                        sum + Math.round((Number(points[id]) || 0) * 100),
+                      0,
+                    ) / 100
+                  ).toFixed(2)}
+                </p>
+                <p className="muted">
+                  {order.length} / 200 câu · {durationMin} phút
+                </p>
+                {order.map((id, index) => (
+                  <div key={id} className="teacher-selection-row">
+                    <span className="min-w-0 flex-1">
+                      {index + 1}.{' '}
+                      {questions?.find((q) => q.id === id)?.content ?? id}
+                    </span>
+                    <div>
+                      <label>
+                        Điểm câu {index + 1}
+                        <Input
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          required
+                          value={points[id]}
+                          onChange={(event) =>
+                            setPoints((current) => ({
+                              ...current,
+                              [id]: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        aria-label={`Đưa câu ${index + 1} lên`}
+                        disabled={index === 0}
+                        onClick={() => move(index, -1)}
+                      >
+                        Lên
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        aria-label={`Đưa câu ${index + 1} xuống`}
+                        disabled={index === order.length - 1}
+                        onClick={() => move(index, 1)}
+                      >
+                        Xuống
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        aria-label={`Bỏ câu ${index + 1}`}
+                        onClick={() => {
+                          setOrder((current) =>
+                            current.filter((questionId) => questionId !== id),
+                          );
+                          setPoints((current) => {
+                            const next = { ...current };
+                            delete next[id];
+                            return next;
+                          });
+                        }}
+                      >
+                        Bỏ chọn
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </Card>
+            </aside>
+          </div>
+          {notice && (
+            <p role="alert" className="text-sm text-red-600">
+              {notice}
+            </p>
+          )}
+          <div className="flex flex-wrap justify-end gap-3">
+            <Link href="/teacher/exams">
+              <Button type="button" variant="outline">
+                Hủy
               </Button>
-              <Button
-                type="button"
-                variant="outline"
-                aria-label={`Đưa câu ${index + 1} xuống`}
-                disabled={index === order.length - 1}
-                onClick={() => move(index, 1)}
-              >
-                Xuống
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                aria-label={`Bỏ câu ${index + 1}`}
-                onClick={() => {
-                  setOrder((current) =>
-                    current.filter((questionId) => questionId !== id),
-                  );
-                  setPoints((current) => {
-                    const next = { ...current };
-                    delete next[id];
-                    return next;
-                  });
-                }}
-              >
-                Bỏ chọn
-              </Button>
-            </div>
-          ))}
-        </Card>
-        {notice && (
-          <p role="alert" className="text-sm text-red-600">
-            {notice}
-          </p>
-        )}
-        <div className="flex flex-wrap justify-end gap-3">
-          <Link href="/teacher/exams">
-            <Button type="button" variant="outline">
-              Hủy
+            </Link>
+            <Button
+              type="submit"
+              disabled={
+                save.isPending || questionsPending || Boolean(questionsError)
+              }
+            >
+              {save.isPending ? 'Đang lưu...' : 'Lưu bản nháp'}
             </Button>
-          </Link>
-          <Button
-            type="submit"
-            disabled={
-              save.isPending || questionsPending || Boolean(questionsError)
-            }
-          >
-            {save.isPending ? 'Đang lưu...' : 'Lưu bản nháp'}
-          </Button>
-        </div>
+          </div>
+        </fieldset>
       </form>
-    </main>
+    </div>
   );
 }
 
@@ -639,24 +674,24 @@ export function ExamPreview({ examId }: { examId: string }) {
     },
   });
   if (session.isPending || !session.data || exam.isPending || preview.isPending)
-    return <main className="p-8 text-slate-500">Đang tải đề thi...</main>;
+    return <div className="p-8 text-slate-500">Đang tải đề thi...</div>;
   if (exam.isError || preview.isError)
     return (
-      <main className="p-8 text-red-600" role="alert">
-        {exam.error?.message ?? preview.error?.message}
-      </main>
+      <div className="teacher-page">
+        <ErrorState
+          error={(exam.error ?? preview.error)!}
+          retry={() => {
+            void exam.refetch();
+            void preview.refetch();
+          }}
+        />
+      </div>
     );
   const examData = exam.data as ExamRecord;
   const previewData = preview.data as ExamPreviewPayload;
   const snapshot = previewData.snapshot;
   return (
-    <main className="mx-auto max-w-5xl space-y-6 p-5 sm:p-8">
-      <Link
-        href="/teacher/exams"
-        className="text-sm text-blue-700 hover:underline"
-      >
-        ← Danh sách đề thi
-      </Link>
+    <div className="teacher-page">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold">{examData.title}</h1>
@@ -716,6 +751,11 @@ export function ExamPreview({ examId }: { examId: string }) {
           {action.error.message}
         </p>
       )}
+      <p className="teacher-summary-ribbon">
+        {previewData.draft
+          ? 'Bản nháp hiện tại — chưa giao cho học viên'
+          : 'Phiên bản đã xuất bản — nội dung và điểm được đóng băng'}
+      </p>
       <Card className="space-y-5 p-5">
         <div>
           <h2 className="text-lg font-semibold">
@@ -773,6 +813,6 @@ export function ExamPreview({ examId }: { examId: string }) {
           </ul>
         </Card>
       )}
-    </main>
+    </div>
   );
 }

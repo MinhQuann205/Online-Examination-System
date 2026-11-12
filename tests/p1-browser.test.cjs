@@ -281,10 +281,28 @@ test('F15: navigation, progress, review flag persistence, keyboard and mobile wi
     await card
       .getByRole('button', { name: 'Bỏ đánh dấu xem lại', exact: true })
       .waitFor();
-    const second = x.page.getByRole('button', { name: /^Đến câu 2:/ });
+    await x.page
+      .getByRole('button', { name: 'Mục lục câu hỏi', exact: true })
+      .click();
+    const second = x.page
+      .getByRole('dialog', { name: 'Mục lục câu hỏi', exact: true })
+      .getByRole('button', { name: /^Đến câu 2:/ });
     await second.focus();
     await x.page.keyboard.press('Enter');
+    await x.page
+      .getByRole('dialog', { name: 'Mục lục câu hỏi', exact: true })
+      .waitFor({ state: 'hidden' });
+    await waitUntil(() =>
+      x.page
+        .locator('#question-' + x.attempt.snapshot.questions[1].questionId)
+        .getAttribute('data-current')
+        .then((value) => value === 'true'),
+    );
+    await x.page
+      .getByRole('button', { name: 'Mục lục câu hỏi', exact: true })
+      .click();
     assert.equal(await second.getAttribute('aria-current'), 'step');
+    await x.page.keyboard.press('Escape');
     await x.page
       .getByRole('button', { name: 'Câu trước', exact: true })
       .click();
@@ -588,6 +606,10 @@ test('F20: Admin edits User, sees backend validation error, and reassigns a clas
       .selectOption(f.teacherB.id);
     await panel
       .getByRole('button', { name: 'Lưu thay đổi', exact: true })
+      .click();
+    await x.page
+      .getByRole('dialog', { name: 'Đổi giảng viên phụ trách?' })
+      .getByRole('button', { name: 'Xác nhận', exact: true })
       .click();
     await waitUntil(
       async () =>

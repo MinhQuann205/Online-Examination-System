@@ -150,6 +150,7 @@ function DetailEditor({
               </li>
             ))}
           </ul>
+          {data.explanation && <p>Giải thích: {data.explanation}</p>}
         </div>
       )}
       {editable && (

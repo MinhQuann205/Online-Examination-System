@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { sessionDocumentId, sessionLifecycle } from './session-lifecycle';
 import type { CurrentUser } from '@exam/shared';
 
 export type ExamAssignment = {
@@ -61,10 +62,13 @@ let refreshInFlight: Promise<boolean> | undefined;
 let refreshGeneration = 0;
 
 function refreshSession() {
+  if (!sessionLifecycle.available()) return Promise.resolve(false);
   if (!refreshInFlight) {
     refreshInFlight = fetch(`${baseUrl}/auth/refresh`, {
       method: 'POST',
       credentials: 'include',
+      // Bound the refresh that account changes must wait for.
+      signal: AbortSignal.timeout(15_000),
     })
       .then((response) => {
         if (response.ok) refreshGeneration++;
@@ -91,26 +95,33 @@ async function request<T>(
   path: string,
   init: RequestInit = {},
   retry = true,
+  accountChange = false,
 ): Promise<T> {
   const generation = refreshGeneration;
+  const session = sessionLifecycle.capture();
+  if (!accountChange) sessionLifecycle.assertCurrent(session);
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...init.headers },
   });
+  if (!accountChange) sessionLifecycle.assertCurrent(session);
   if (
     response.status === 401 &&
     retry &&
     path !== '/auth/refresh' &&
     path !== '/auth/login'
   ) {
-    if (generation !== refreshGeneration || (await refreshSession()))
-      return request<T>(path, init, false);
+    const refreshed =
+      generation !== refreshGeneration || (await refreshSession());
+    sessionLifecycle.assertCurrent(session);
+    if (refreshed) return request<T>(path, init, false);
   }
   if (!response.ok) {
     const data = (await response.json().catch(() => ({}))) as {
       message?: string;
     };
+    if (!accountChange) sessionLifecycle.assertCurrent(session);
     throw new ApiError(
       typeof data.message === 'string'
         ? data.message
@@ -119,7 +130,37 @@ async function request<T>(
     );
   }
   if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
+  const data = (await response.json()) as T;
+  if (!accountChange) sessionLifecycle.assertCurrent(session);
+  return data;
+}
+
+async function changeAccount<T>(path: string, init: RequestInit): Promise<T> {
+  sessionLifecycle.begin();
+  try {
+    // Let an older refresh finish setting its cookie before login/logout writes it.
+    await refreshInFlight?.catch(() => false);
+    const result = await request<T>(
+      path,
+      { ...init, signal: AbortSignal.timeout(15_000) },
+      false,
+      true,
+    );
+    if (
+      typeof window !== 'undefined' &&
+      typeof BroadcastChannel !== 'undefined'
+    ) {
+      const channel = new BroadcastChannel('examspace-account-v1');
+      channel.postMessage({
+        type: 'account-changed',
+        sender: sessionDocumentId,
+      });
+      channel.close();
+    }
+    return result;
+  } finally {
+    sessionLifecycle.finish();
+  }
 }
 
 export const api = {
@@ -137,14 +178,14 @@ export const api = {
       { method: 'PUT', body: JSON.stringify({ marked }) },
     ),
   login: (email: string, password: string) =>
-    request<CurrentUser>('/auth/login', {
+    changeAccount<CurrentUser>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
   me: () => request<CurrentUser>('/auth/me'),
   dashboard: (role: Lowercase<CurrentUser['role']>) =>
     request<{ user: CurrentUser; section: string }>(`/dashboard/${role}`),
-  logout: () => request<void>('/auth/logout', { method: 'POST' }, false),
+  logout: () => changeAccount<void>('/auth/logout', { method: 'POST' }),
   users: (params: string) =>
     request<{
       items: Array<Record<string, unknown>>;
@@ -258,7 +299,10 @@ export const api = {
     request<AttemptRecord>(`/exam-assignments/${assignmentId}/start`, {
       method: 'POST',
     }),
-  attempt: (id: string) => request<AttemptRecord>(`/exam-attempts/${id}`),
+  attempt: (id: string) =>
+    request<AttemptRecord>(`/exam-attempts/${id}`, {
+      signal: AbortSignal.timeout(15_000),
+    }),
   saveAttemptAnswer: (
     attemptId: string,
     questionId: string,
@@ -267,10 +311,17 @@ export const api = {
   ) =>
     request<{ saved: boolean; revision?: number; status?: string }>(
       `/exam-attempts/${attemptId}/answers/${questionId}`,
-      { method: 'PUT', body: JSON.stringify({ revision, answer }) },
+      {
+        method: 'PUT',
+        body: JSON.stringify({ revision, answer }),
+        signal: AbortSignal.timeout(15_000),
+      },
     ),
   submitAttempt: (id: string) =>
-    request<AttemptRecord>(`/exam-attempts/${id}/submit`, { method: 'POST' }),
+    request<AttemptRecord>(`/exam-attempts/${id}/submit`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(15_000),
+    }),
   studentResults: () =>
     request<{
       items: Array<Record<string, unknown>>;

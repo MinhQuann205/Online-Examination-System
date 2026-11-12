@@ -16,12 +16,12 @@ export function Button({
   return (
     <Comp
       className={cn(
-        'inline-flex h-10 items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500',
-        variant === 'default' && 'bg-blue-600 text-white hover:bg-blue-700',
+        'inline-flex h-10 items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus',
+        variant === 'default' &&
+          'bg-primary text-on-primary hover:bg-primary-hover',
         variant === 'outline' &&
-          'border border-slate-200 bg-white text-slate-800 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800',
-        variant === 'ghost' &&
-          'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800',
+          'border border-line bg-surface text-ink hover:bg-surface-soft',
+        variant === 'ghost' && 'text-muted hover:bg-surface-soft',
         className,
       )}
       {...props}

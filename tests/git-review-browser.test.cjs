@@ -106,10 +106,14 @@ test('GR03 browser: Student history/detail and Teacher report show published v1 
   try {
     await teacher.page.goto(web + '/teacher/exams/' + f.exam.id + '/results');
     await teacher.page
-      .getByText(titleA + ' · Phiên bản 1', { exact: true })
+      .locator('[data-report-assignment]')
+      .filter({ hasText: titleA })
+      .getByText('Phiên bản 1', { exact: true })
       .waitFor();
     await teacher.page
-      .getByText(titleB + ' · Phiên bản 2', { exact: true })
+      .locator('[data-report-assignment]')
+      .filter({ hasText: titleB })
+      .getByText('Phiên bản 2', { exact: true })
       .waitFor();
   } finally {
     await teacher.context.close();

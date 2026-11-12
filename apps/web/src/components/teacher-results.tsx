@@ -1,16 +1,29 @@
 'use client';
-
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { ArrowUpRight } from 'lucide-react';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Pagination } from '@/components/pagination';
-
-type ExamOption = { id: string; title: string; status: string };
+import { EmptyState, StatusBadge } from '@/components/admin/admin-ui';
+import {
+  ResultError,
+  ResultsHeading,
+  ResultStatus,
+  resultDate,
+  stateLabel,
+  useResultActor,
+  type ResultRole,
+} from './results/results-ui';
+type ExamOption = {
+  id: string;
+  title: string;
+  status: string;
+  _count: { assignments: number; attempts: number };
+};
 type AttemptSummary = {
   id: string;
   status: string;
@@ -18,6 +31,7 @@ type AttemptSummary = {
   submittedAt: string | null;
   score: string | null;
   maxScore: string | null;
+  exam: { title: string; durationMin: number | null };
 };
 type Recipient = {
   id: string;
@@ -27,7 +41,7 @@ type Recipient = {
   isCurrentRecipient: boolean;
   isActive: boolean;
 };
-type ExamResultData = {
+type ExamReport = {
   exam: { id: string; title: string };
   assignments: Array<{
     id: string;
@@ -36,212 +50,305 @@ type ExamResultData = {
     opensAt: string | null;
     closesAt: string | null;
     maxAttempts: number;
-    examVersion: { title: string; number: number | null };
+    examVersion: {
+      id: string | null;
+      title: string;
+      number: number | null;
+      durationMin: number | null;
+    };
     students: Recipient[];
   }>;
 };
-
-function useTeacher() {
-  const router = useRouter();
-  const session = useQuery({ queryKey: ['me'], queryFn: api.me, retry: false });
-  useEffect(() => {
-    if (session.isError) router.replace('/login');
-    if (session.data && !['TEACHER', 'ADMIN'].includes(session.data.role))
-      router.replace(`/dashboard/${session.data.role.toLowerCase()}`);
-  }, [router, session.data, session.isError]);
-  return session;
-}
-
 export function TeacherResultsIndex() {
-  const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const session = useTeacher();
-  const exams = useQuery({
-    queryKey: ['exams', 'results', page, search],
-    queryFn: () =>
-      api.exams(
-        `results=true&page=${page}&search=${encodeURIComponent(search)}`,
-      ),
-    enabled: ['TEACHER', 'ADMIN'].includes(session.data?.role ?? ''),
+  const [page, setPage] = useState(1),
+    [search, setSearch] = useState(''),
+    [status, setStatus] = useState('');
+  const { session, allowed, user } = useResultActor('TEACHER');
+  const q = useQuery({
+    queryKey: ['exams', 'results', user?.id, page, search, status],
+    queryFn: async () =>
+      (await api.exams(
+        new URLSearchParams({
+          results: 'true',
+          page: String(page),
+          search,
+          ...(status ? { status } : {}),
+        }).toString(),
+      )) as unknown as {
+        items: ExamOption[];
+        total: number;
+        pageCount: number;
+      },
+    enabled: allowed,
+    retry: false,
+    staleTime: 0,
+    gcTime: 0,
   });
-  if (session.isPending || !session.data)
-    return <main className="p-8 text-slate-500">Đang tải đề thi...</main>;
-  const items = (exams.data?.items ?? []) as ExamOption[];
+  if (session.isError)
+    return (
+      <ResultError error={session.error} retry={() => void session.refetch()} />
+    );
+  if (!allowed) return <p role="status">Đang xác thực phiên...</p>;
   return (
-    <main className="mx-auto max-w-5xl space-y-5 p-5 sm:p-8">
-      <div>
-        <p className="text-sm font-semibold text-blue-600">Giảng viên</p>
-        <h1 className="mt-1 text-3xl font-bold">Kết quả thi</h1>
-      </div>
-      <Input
-        aria-label="Tìm kiếm"
-        placeholder="Tìm kiếm..."
-        value={search}
-        onChange={(event) => {
-          setSearch(event.target.value);
-          setPage(1);
-        }}
-      />
-      {exams.error && (
-        <p role="alert" className="text-red-600">
-          {exams.error.message}
-        </p>
-      )}
-      {exams.isPending && <p role="status">Đang tải danh sách kết quả...</p>}
-      {items.map((exam) => (
-        <Card
-          key={exam.id}
-          className="flex flex-wrap items-center justify-between gap-4 p-5"
+    <div className="results-page">
+      <ResultsHeading
+        title="Kết quả thi"
+        description="Tra cứu đề thi và mở báo cáo trong phạm vi bạn được quản lý."
+      >
+        <Button
+          type="button"
+          variant="outline"
+          disabled={q.isFetching}
+          onClick={() => void q.refetch()}
         >
-          <div>
-            <h2 className="font-semibold">{exam.title}</h2>
-            <p className="mt-1 text-sm text-slate-500">{exam.status}</p>
-          </div>
-          <Link href={`/teacher/exams/${exam.id}/results`}>
-            <Button type="button" variant="outline">
-              Xem kết quả
-            </Button>
-          </Link>
-        </Card>
-      ))}
-      {!exams.isPending && items.length === 0 && (
-        <Card className="p-6 text-sm text-slate-500">Chưa có đề thi.</Card>
-      )}
-      {exams.data && (
-        <Pagination
-          page={page}
-          total={exams.data.total}
-          pageCount={exams.data.pageCount}
-          onPage={setPage}
-          busy={exams.isFetching}
-        />
-      )}
-    </main>
+          Làm mới danh sách
+        </Button>
+      </ResultsHeading>
+      <Card className="results-report-card">
+        <div className="admin-toolbar">
+          <label>
+            Tìm kiếm
+            <Input
+              aria-label="Tìm kiếm"
+              placeholder="Tìm kiếm..."
+              maxLength={200}
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
+            />
+          </label>
+          <label>
+            Trạng thái đề
+            <select
+              aria-label="Trạng thái đề"
+              value={status}
+              onChange={(e) => {
+                setStatus(e.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="">Tất cả trạng thái</option>
+              {['DRAFT', 'PUBLISHED', 'ARCHIVED'].map((s) => (
+                <option key={s} value={s}>
+                  {stateLabel(s)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {q.isPending ? (
+          <p role="status">Đang tải danh sách kết quả...</p>
+        ) : q.isError ? (
+          <ResultError error={q.error} retry={() => void q.refetch()} />
+        ) : (
+          <>
+            <p className="muted">
+              {q.data.total} đề phù hợp. Số lượt làm được API trả theo đề; nội
+              dung báo cáo vẫn tuân theo quyền lớp và bài giao.
+            </p>
+            <div className="results-exam-list">
+              {q.data.items.map((exam) => (
+                <Card className="results-exam-row" key={exam.id}>
+                  <div>
+                    <StatusBadge
+                      tone={exam.status === 'PUBLISHED' ? 'success' : 'neutral'}
+                    >
+                      {stateLabel(exam.status)}
+                    </StatusBadge>
+                    <h2>{exam.title}</h2>
+                    <p>
+                      {exam._count.assignments} bài giao ·{' '}
+                      {exam._count.attempts} lượt làm của đề
+                    </p>
+                  </div>
+                  <Link
+                    className="results-exam-link"
+                    href={`/teacher/exams/${exam.id}/results`}
+                  >
+                    Xem kết quả <ArrowUpRight size={18} aria-hidden="true" />
+                  </Link>
+                </Card>
+              ))}
+            </div>
+            {!q.data.items.length && (
+              <EmptyState title="Chưa có đề thi.">
+                Thử đổi từ khóa hoặc bộ lọc. Không có bài làm giả được tạo cho
+                đề nháp.
+              </EmptyState>
+            )}
+            <Pagination
+              page={page}
+              total={q.data.total}
+              pageCount={q.data.pageCount}
+              onPage={setPage}
+              busy={q.isFetching}
+            />
+          </>
+        )}
+      </Card>
+    </div>
   );
 }
-
-export function TeacherExamResults({ examId }: { examId: string }) {
-  const session = useTeacher();
-  const query = useQuery({
-    queryKey: ['exam-results', examId],
-    queryFn: () => api.examResults(examId),
-    enabled: ['TEACHER', 'ADMIN'].includes(session.data?.role ?? ''),
-    retry: false,
-  });
-  if (session.isPending || query.isPending)
-    return <main className="p-8 text-slate-500">Đang tải kết quả...</main>;
-  if (query.isError)
+export function TeacherExamResults({
+  examId,
+  role = 'TEACHER',
+}: {
+  examId: string;
+  role?: Extract<ResultRole, 'TEACHER' | 'ADMIN'>;
+}) {
+  const { session, allowed, user } = useResultActor(role),
+    q = useQuery({
+      queryKey: ['exam-results', role, user?.id, examId],
+      queryFn: async () =>
+        (await api.examResults(examId)) as unknown as ExamReport,
+      enabled: allowed,
+      retry: false,
+      staleTime: 0,
+      gcTime: 0,
+    });
+  if (session.isError)
     return (
-      <main role="alert" className="p-8 text-red-600">
-        {query.error.message}
-      </main>
+      <ResultError error={session.error} retry={() => void session.refetch()} />
     );
-  const data = query.data as unknown as ExamResultData;
+  if (!allowed || q.isPending) return <p role="status">Đang tải kết quả...</p>;
+  if (q.isError)
+    return <ResultError error={q.error} retry={() => void q.refetch()} />;
+  const data = q.data;
   return (
-    <main className="mx-auto max-w-6xl space-y-5 p-5 sm:p-8">
-      <Link
-        href="/teacher/results"
-        className="text-sm text-blue-700 hover:underline"
+    <div className="results-page">
+      <ResultsHeading
+        title={data.exam.title}
+        description="Báo cáo đề thi. Tên đề hiện tại ở tiêu đề; từng bài giao và lượt làm giữ thông tin lịch sử riêng."
       >
-        ← Kết quả thi
-      </Link>
-      <header>
-        <p className="text-sm font-semibold text-blue-600">Báo cáo đề thi</p>
-        <h1 className="mt-1 text-3xl font-bold">{data.exam.title}</h1>
-        <p className="text-sm text-slate-500">
-          Tên đề hiện tại; mỗi bài giao bên dưới giữ tên phiên bản đã xuất bản.
-        </p>
-      </header>
-      {data.assignments.map((assignment) => (
-        <Card key={assignment.id} className="space-y-3 p-5">
-          <div>
-            <p className="font-semibold">
-              {assignment.examVersion.title} · Phiên bản{' '}
-              {assignment.examVersion.number ?? 'không khả dụng'}
-            </p>
-            <h2 className="font-semibold">
-              {assignment.class?.name ??
-                assignment.student?.fullName ??
-                'Bài giao'}
-            </h2>
-            <p className="mt-1 text-xs text-slate-500">
-              Tối đa {assignment.maxAttempts} lượt · Hạn:{' '}
-              {assignment.closesAt
-                ? new Date(assignment.closesAt).toLocaleString('vi-VN')
-                : 'Không giới hạn'}
-            </p>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[620px] text-left text-sm">
-              <thead className="text-xs uppercase text-slate-500">
-                <tr>
-                  <th className="py-2">Học viên</th>
-                  <th>Trạng thái</th>
-                  <th>Điểm</th>
-                  <th>Thời điểm nộp</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {assignment.students.map((student) => {
-                  const latest = student.attempts[0];
-                  return (
-                    <tr key={student.id} className="border-t">
-                      <td className="py-2">
-                        {student.fullName}
-                        {!student.isCurrentRecipient && (
-                          <span className="block text-xs text-amber-700">
-                            Học viên từng tham gia
-                          </span>
-                        )}
-                        {!student.isActive && (
-                          <span className="block text-xs text-slate-500">
-                            Tài khoản đã khóa
-                          </span>
-                        )}
-                        <span className="block text-xs text-slate-500">
-                          {student.email}
-                        </span>
-                      </td>
-                      <td>{latest?.status ?? 'Chưa bắt đầu'}</td>
-                      <td>
-                        {latest?.score === null || !latest
-                          ? '—'
-                          : `${latest.score} / ${latest.maxScore}`}
-                      </td>
-                      <td>
-                        {latest?.submittedAt
-                          ? new Date(latest.submittedAt).toLocaleString('vi-VN')
-                          : '—'}
-                      </td>
-                      <td>
-                        {latest && latest.status !== 'IN_PROGRESS' && (
-                          <Link
-                            href={`/teacher/results/${latest.id}`}
-                            className="text-blue-700 hover:underline"
-                          >
-                            Chi tiết
-                          </Link>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          {assignment.students.length === 0 && (
-            <p className="text-sm text-slate-500">
-              Chưa có học viên trong phạm vi giao bài.
-            </p>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={q.isFetching}
+          onClick={() => void q.refetch()}
+        >
+          Làm mới báo cáo
+        </Button>
+      </ResultsHeading>
+      <p className="muted">
+        {data.assignments.length} bài giao trong báo cáo được phép xem. Danh
+        sách học viên và lượt làm dưới đây là toàn bộ dữ liệu endpoint này trả
+        về, không phải thống kê toàn hệ thống.
+      </p>
+      {data.assignments.map((asg) => (
+        <Card
+          className="results-report-card"
+          key={asg.id}
+          data-report-assignment={asg.id}
+        >
+          <header>
+            <div>
+              <StatusBadge tone="primary">
+                Phiên bản {asg.examVersion.number ?? 'không khả dụng'}
+              </StatusBadge>
+              <h2>{asg.examVersion.title}</h2>
+              <p>{asg.class?.name ?? asg.student?.fullName ?? 'Bài giao'}</p>
+            </div>
+          </header>
+          <dl className="results-meta">
+            <div>
+              <dt>Mở từ</dt>
+              <dd>
+                {asg.opensAt ? resultDate(asg.opensAt) : 'Không giới hạn'}
+              </dd>
+            </div>
+            <div>
+              <dt>Đóng lúc</dt>
+              <dd>
+                {asg.closesAt ? resultDate(asg.closesAt) : 'Không giới hạn'}
+              </dd>
+            </div>
+            <div>
+              <dt>Giới hạn lượt làm</dt>
+              <dd>{asg.maxAttempts} lượt / học viên</dd>
+            </div>
+          </dl>
+          {!asg.students.length ? (
+            <EmptyState title="Chưa có học viên trong phạm vi giao bài.">
+              Không có kết quả để hiển thị.
+            </EmptyState>
+          ) : (
+            <div
+              className="results-table-scroll"
+              role="region"
+              aria-label={`Lượt làm của ${asg.class?.name ?? asg.student?.fullName ?? asg.examVersion.title}`}
+              tabIndex={0}
+            >
+              <table>
+                <caption>Học viên và các lượt làm trong bài giao</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Học viên</th>
+                    <th scope="col">Bài thi của lượt làm</th>
+                    <th scope="col">Trạng thái</th>
+                    <th scope="col">Điểm</th>
+                    <th scope="col">Thời điểm nộp</th>
+                    <th scope="col">Thao tác</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {asg.students.flatMap((student) =>
+                    (student.attempts.length ? student.attempts : [null]).map(
+                      (attempt) => (
+                        <tr key={student.id + ':' + (attempt?.id ?? 'empty')}>
+                          <td>
+                            {student.fullName}
+                            <small>{student.email}</small>
+                            {!student.isCurrentRecipient && (
+                              <small>Học viên từng tham gia</small>
+                            )}
+                            {!student.isActive && (
+                              <small>Tài khoản đã khóa</small>
+                            )}
+                          </td>
+                          <td>{attempt?.exam.title ?? '—'}</td>
+                          <td>
+                            {attempt ? (
+                              <ResultStatus status={attempt.status} />
+                            ) : (
+                              'Chưa bắt đầu'
+                            )}
+                          </td>
+                          <td>
+                            {attempt?.score != null
+                              ? `${attempt.score} / ${attempt.maxScore ?? '—'}`
+                              : '—'}
+                          </td>
+                          <td>{resultDate(attempt?.submittedAt)}</td>
+                          <td>
+                            {attempt && attempt.status !== 'IN_PROGRESS' && (
+                              <Link
+                                className="results-exam-link"
+                                href={`/${role === 'ADMIN' ? 'admin' : 'teacher'}/results/${attempt.id}`}
+                              >
+                                Chi tiết
+                              </Link>
+                            )}
+                          </td>
+                        </tr>
+                      ),
+                    ),
+                  )}
+                </tbody>
+              </table>
+            </div>
           )}
         </Card>
       ))}
-      {data.assignments.length === 0 && (
-        <Card className="p-6 text-sm text-slate-500">
-          Đề thi chưa được giao.
+      {!data.assignments.length && (
+        <Card className="results-report-card">
+          <EmptyState title="Đề thi chưa có bài giao trong phạm vi của bạn.">
+            Chưa có báo cáo kết quả để hiển thị. Trạng thái nháp không tự tạo
+            hoặc xóa lịch sử lượt làm.
+          </EmptyState>
         </Card>
       )}
-    </main>
+    </div>
   );
 }

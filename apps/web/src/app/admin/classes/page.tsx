@@ -1,4 +1,4 @@
-import { Management } from '@/components/management';
+import { AdminClasses } from '@/components/admin/admin-classes';
 export default function Page() {
-  return <Management kind="classes" />;
+  return <AdminClasses />;
 }

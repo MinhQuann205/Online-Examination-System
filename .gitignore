@@ -29,3 +29,6 @@ pnpm-debug.log
 *.log
 /playwright-report/
 /test-results/
+
+# Next.js auto-generated rule file
+apps/web/AGENTS.md

@@ -1,5 +1,22 @@
 # ExamSpace — Online Examination System
 
+## Chạy bản giao diện Stitch (UI-01–UI-07)
+
+Bản UI đang phát triển nằm trong worktree **ExamSpace-Stitch-UI**, nhánh
+`feature/stitch-examspace-ui`. Chạy repository Phase 3 gốc sẽ hiển thị giao diện cũ.
+
+1. Dừng terminal web cũ ở cổng 3000 bằng Ctrl+C.
+2. Mở terminal tại thư mục **ExamSpace-Stitch-UI** (kiểm tra bằng `Get-Location`).
+3. Dùng `.env` local của worktree theo cấu hình bên dưới; không chép secrets test từ TEMP.
+4. Chạy `corepack pnpm dev:stitch` hoặc mở `start-stitch.cmd` ngay trong worktree.
+   Nếu API ở cổng 4000 đã chạy đúng và Swagger đang mở, dùng
+   `corepack pnpm dev:stitch:web` để chỉ chạy frontend, giữ API hiện tại.
+5. Mở <http://localhost:3000>. Terminal phải in **ExamSpace STITCH UI** và đúng đường dẫn worktree.
+
+Lệnh này từ chối cổng 3000 đang bị chiếm để tránh âm thầm chuyển sang cổng khác.
+Nó gọi quy trình dev hiện có, không migrate/reset/seed database. Khi schema hiện hữu
+đã đủ năm migrations, không cần chạy lại migrate hoặc seed để xem UI.
+
 Monorepo pnpm cho hệ thống thi trực tuyến: Next.js App Router, NestJS modular monolith, PostgreSQL 16 và Prisma ORM 7. Frontend dùng React Hook Form, Zod, TanStack Query, Tailwind CSS và dnd-kit. Trạng thái nghiệm thu được ghi trong [lộ trình](docs/ROADMAP.md) và các báo cáo Phase 3; build thành công không thay thế kiểm thử nghiệp vụ.
 
 ## Chức năng hiện có
