@@ -43,3 +43,14 @@ apps/web/AGENTS.md
 /docs/EXAMSPACE_FINAL_*.md
 /docs/STITCH_EXAMSPACE_*.md
 /docs/evidence/
+
+# Local tooling and unused setup files.
+/AGENTS.md
+/skills-lock.json
+/package-lock.json
+/backend/
+
+# Development reports are kept outside the project documentation.
+/docs/EXAMSPACE_*.md
+/docs/PHASE3_*.md
+/docs/ROADMAP.md
