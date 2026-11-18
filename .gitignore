@@ -32,3 +32,14 @@ pnpm-debug.log
 
 # Next.js auto-generated rule file
 apps/web/AGENTS.md
+
+# Local assistant configuration. Existing tracked files are unaffected.
+/.codex/
+/.agents/
+
+# Local acceptance reports and screenshots; keep product documentation explicit.
+/docs/EXAMSPACE_UI*.md
+/docs/EXAMSPACE_CAPSTONE_*.md
+/docs/EXAMSPACE_FINAL_*.md
+/docs/STITCH_EXAMSPACE_*.md
+/docs/evidence/

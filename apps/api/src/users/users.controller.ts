@@ -48,9 +48,9 @@ export class UsersController {
   }
   @Patch(':id/status') @Roles('ADMIN') status(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() body: { isActive: boolean },
+    @Body() body: unknown,
   ) {
-    return this.service.status(id, body.isActive === true);
+    return this.service.status(id, body);
   }
   @Post(':id/reset-password') @Roles('ADMIN') reset(
     @Param('id', new ParseUUIDPipe()) id: string,

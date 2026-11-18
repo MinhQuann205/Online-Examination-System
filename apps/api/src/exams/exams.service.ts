@@ -10,6 +10,7 @@ import type { AuthRequest } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
 import { resultAssignmentScope } from '../results/result-scope';
 import { examSnapshotSchema, snapshotQuestion } from './exam-snapshot';
+import { snapshotStructure } from './exam-structure';
 
 const examInput = z
   .object({
@@ -50,6 +51,9 @@ const examInput = z
 
 const listQuery = z.object({
   results: z.enum(['true']).optional(),
+  overview: z.literal('true').optional(),
+  assignable: z.literal('true').optional(),
+  id: z.uuid().optional(),
   search: z.string().trim().max(200).optional(),
   status: z.enum(['DRAFT', 'PUBLISHED', 'ARCHIVED']).optional(),
   page: z.coerce.number().int().positive().default(1),
@@ -60,8 +64,19 @@ export class ExamsService {
   constructor(private readonly db: PrismaService) {}
 
   async list(actor: AuthRequest['user'], rawQuery: unknown) {
+    if (actor.role !== 'TEACHER' && actor.role !== 'ADMIN')
+      throw new ForbiddenException();
     const query = listQuery.parse(rawQuery);
     const where: Prisma.ExamWhereInput = {
+      ...(query.id ? { id: query.id } : {}),
+      ...(query.assignable
+        ? {
+            AND: [
+              { status: { not: 'ARCHIVED' } },
+              { versions: { some: { publishedAt: { lte: new Date() } } } },
+            ],
+          }
+        : {}),
       ...(actor.role === 'TEACHER'
         ? query.results
           ? {
@@ -77,34 +92,190 @@ export class ExamsService {
         ? { title: { contains: query.search, mode: 'insensitive' } }
         : {}),
     };
+    if (query.overview) return this.listWithStructure(actor, where, query.page);
     const [items, total] = await this.db.$transaction([
       this.db.exam.findMany({
         where,
         orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
         skip: (query.page - 1) * 20,
         take: 20,
-        include: {
-          _count: {
-            select: {
-              assignments:
-                actor.role === 'TEACHER'
-                  ? { where: resultAssignmentScope(actor) }
-                  : true,
-              attempts:
-                actor.role === 'TEACHER'
-                  ? { where: { assignment: resultAssignmentScope(actor) } }
-                  : true,
-            },
-          },
-          versions: {
-            select: { id: true, number: true, publishedAt: true },
-            orderBy: { number: 'desc' },
-          },
-        },
+        include: this.listInclude(actor),
       }),
       this.db.exam.count({ where }),
     ]);
     return { items, total, page: query.page, pageCount: Math.ceil(total / 20) };
+  }
+
+  private listInclude(actor: AuthRequest['user']) {
+    return {
+      _count: {
+        select: {
+          assignments:
+            actor.role === 'TEACHER'
+              ? { where: resultAssignmentScope(actor) }
+              : true,
+          attempts:
+            actor.role === 'TEACHER'
+              ? { where: { assignment: resultAssignmentScope(actor) } }
+              : true,
+        },
+      },
+      versions: {
+        select: { id: true, number: true, publishedAt: true },
+        orderBy: { number: 'desc' },
+      },
+    } satisfies Prisma.ExamInclude;
+  }
+
+  private async listWithStructure(
+    actor: AuthRequest['user'],
+    where: Prisma.ExamWhereInput,
+    requestedPage: number,
+  ) {
+    return this.db.$transaction(
+      async (tx) => {
+        const total = await tx.exam.count({ where });
+        const pageCount = Math.max(1, Math.ceil(total / 20)),
+          page = Math.min(requestedPage, pageCount);
+        const items = await tx.exam.findMany({
+          where,
+          include: this.listInclude(actor),
+          orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+          skip: (page - 1) * 20,
+          take: 20,
+        });
+        const own = items.filter(
+          (x) => actor.role === 'ADMIN' || x.authorId === actor.id,
+        );
+        const draft = own.filter((x) => x.status === 'DRAFT'),
+          published = own.filter((x) => x.status !== 'DRAFT');
+        const draftGroups = draft.length
+          ? await tx.examQuestion.groupBy({
+              by: ['examId', 'version'],
+              where: {
+                OR: draft.map((x) => ({ examId: x.id, version: x.version })),
+              },
+              _count: { _all: true },
+              _sum: { points: true },
+            })
+          : [];
+        const versions = published.length
+          ? await tx.examVersion.findMany({
+              where: {
+                OR: published.map((x) => ({ examId: x.id, number: x.version })),
+              },
+              select: { examId: true, number: true, snapshot: true },
+            })
+          : [];
+        return {
+          items: items.map((item) => {
+            let structure: {
+              kind: 'DRAFT' | 'PUBLISHED_SNAPSHOT' | 'UNAVAILABLE';
+              version: number;
+              questionCount: number | null;
+              totalPoints: string | null;
+              durationMin: number | null;
+            } = {
+              kind: 'UNAVAILABLE',
+              version: item.version,
+              questionCount: null,
+              totalPoints: null,
+              durationMin: null,
+            };
+            if (actor.role === 'ADMIN' || item.authorId === actor.id) {
+              if (item.status === 'DRAFT') {
+                const g = draftGroups.find(
+                  (x) => x.examId === item.id && x.version === item.version,
+                );
+                structure = {
+                  kind: 'DRAFT',
+                  version: item.version,
+                  questionCount: g?._count._all ?? 0,
+                  totalPoints: g?._sum.points?.toFixed(2) ?? '0.00',
+                  durationMin: item.durationMin,
+                };
+              } else {
+                const v = versions.find(
+                    (x) => x.examId === item.id && x.number === item.version,
+                  ),
+                  parsed = snapshotStructure(v?.snapshot);
+                if (parsed)
+                  structure = {
+                    kind: 'PUBLISHED_SNAPSHOT',
+                    version: item.version,
+                    ...parsed,
+                  };
+              }
+            }
+            return { ...item, structure };
+          }),
+          total,
+          page,
+          pageCount,
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
+  }
+
+  private async authorizeExam(id: string, actor: AuthRequest['user']) {
+    if (actor.role !== 'ADMIN' && actor.role !== 'TEACHER')
+      throw new ForbiddenException();
+    const exam = await this.db.exam.findUnique({
+      where: { id },
+      select: { id: true, authorId: true, status: true, version: true },
+    });
+    if (!exam) throw new NotFoundException('Không tìm thấy đề thi');
+    if (actor.role === 'TEACHER' && exam.authorId !== actor.id)
+      throw new ForbiddenException();
+    return exam;
+  }
+
+  async versionsPage(id: string, actor: AuthRequest['user'], raw: unknown) {
+    const q = z
+      .object({
+        paged: z.literal('true'),
+        page: z.coerce.number().int().min(1).max(1000000).default(1),
+        limit: z.coerce.number().int().min(1).max(100).default(20),
+        id: z.uuid().optional(),
+        search: z
+          .string()
+          .trim()
+          .max(12)
+          .refine(
+            (v) =>
+              !v ||
+              (/^v?[1-9]\d*$/i.test(v) &&
+                Number.isSafeInteger(Number(v.replace(/^v/i, ''))) &&
+                Number(v.replace(/^v/i, '')) <= 2147483647),
+            'Nhập số phiên bản hợp lệ, ví dụ v2',
+          )
+          .optional(),
+      })
+      .parse(raw);
+    await this.authorizeExam(id, actor);
+    const where: Prisma.ExamVersionWhereInput = {
+      examId: id,
+      publishedAt: { lte: new Date() },
+      ...(q.id ? { id: q.id } : {}),
+      ...(q.search ? { number: Number(q.search.replace(/^v/i, '')) } : {}),
+    };
+    return this.db.$transaction(
+      async (tx) => {
+        const total = await tx.examVersion.count({ where }),
+          pageCount = Math.ceil(total / q.limit),
+          page = Math.min(q.page, Math.max(1, pageCount));
+        const items = await tx.examVersion.findMany({
+          where,
+          select: { id: true, number: true, publishedAt: true },
+          orderBy: [{ number: 'desc' }, { id: 'desc' }],
+          skip: (page - 1) * q.limit,
+          take: q.limit,
+        });
+        return { items, total, page, limit: q.limit, pageCount };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
   }
 
   private async owned(id: string, actor: AuthRequest['user']) {
@@ -126,7 +297,11 @@ export class ExamsService {
     return exam;
   }
 
-  private async currentDraft(id: string, version: number) {
+  private async currentDraft(
+    id: string,
+    version: number,
+    includeVersions = true,
+  ) {
     return this.db.exam.findUniqueOrThrow({
       where: { id },
       include: {
@@ -134,10 +309,12 @@ export class ExamsService {
           where: { version },
           orderBy: { position: 'asc' },
         },
-        versions: {
-          select: { id: true, number: true, publishedAt: true },
-          orderBy: { number: 'desc' },
-        },
+        versions: includeVersions
+          ? {
+              select: { id: true, number: true, publishedAt: true },
+              orderBy: { number: 'desc' },
+            }
+          : false,
       },
     });
   }
@@ -219,7 +396,15 @@ export class ExamsService {
     });
   }
 
-  async get(id: string, actor: AuthRequest['user']) {
+  async get(id: string, actor: AuthRequest['user'], raw: unknown = {}) {
+    const query = z
+      .object({ versions: z.enum(['all', 'none']).default('all') })
+      .parse(raw);
+    if (query.versions === 'none') {
+      const exam = await this.authorizeExam(id, actor);
+      const current = await this.currentDraft(id, exam.version, false);
+      return { ...current, versions: [] };
+    }
     const exam = await this.owned(id, actor);
     const current = await this.currentDraft(id, exam.version);
     return { ...current, versions: exam.versions };
@@ -258,14 +443,20 @@ export class ExamsService {
     });
   }
 
-  async preview(id: string, actor: AuthRequest['user']) {
-    const exam = await this.owned(id, actor);
-    if (exam.status === 'DRAFT') {
-      const draft = await this.currentDraft(id, exam.version);
+  async preview(id: string, actor: AuthRequest['user'], query: unknown = {}) {
+    if (actor.role !== 'ADMIN' && actor.role !== 'TEACHER')
+      throw new ForbiddenException();
+    const { versionId } = z
+      .object({ versionId: z.uuid().optional() })
+      .strict()
+      .parse(query);
+    const exam = await this.authorizeExam(id, actor);
+    if (!versionId && exam.status === 'DRAFT') {
+      const draft = await this.currentDraft(id, exam.version, false);
       return { draft: true, snapshot: this.snapshot(draft) };
     }
     const version = await this.db.examVersion.findFirst({
-      where: { examId: id },
+      where: { examId: id, ...(versionId ? { id: versionId } : {}) },
       orderBy: { number: 'desc' },
     });
     if (!version)
@@ -273,12 +464,14 @@ export class ExamsService {
     return {
       draft: false,
       version: version.number,
+      examVersionId: version.id,
+      publishedAt: version.publishedAt,
       snapshot: examSnapshotSchema.parse(version.snapshot),
     };
   }
 
   async versions(id: string, actor: AuthRequest['user']) {
-    await this.owned(id, actor);
+    await this.authorizeExam(id, actor);
     return this.db.examVersion.findMany({
       where: { examId: id, publishedAt: { lte: new Date() } },
       select: { id: true, number: true, publishedAt: true },

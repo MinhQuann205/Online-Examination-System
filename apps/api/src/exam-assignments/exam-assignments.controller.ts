@@ -32,6 +32,12 @@ export class ExamAssignmentsController {
     return this.assignments.create(request.user, body);
   }
 
+  @Post('review')
+  @Roles('ADMIN', 'TEACHER')
+  review(@Req() request: AuthRequest, @Body() body: unknown) {
+    return this.assignments.review(request.user, body);
+  }
+
   @Get(':id')
   get(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -50,12 +56,24 @@ export class ExamAssignmentsController {
     return this.assignments.update(id, request.user, body);
   }
 
+  @Get(':id/progress')
+  @Roles('ADMIN', 'TEACHER')
+  progress(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() request: AuthRequest,
+  ) {
+    return this.assignments.progress(id, request.user);
+  }
+
   @Get(':id/students')
   @Roles('ADMIN', 'TEACHER')
   students(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Req() request: AuthRequest,
+    @Query() query: Record<string, string> = {},
   ) {
+    if (Object.keys(query).length)
+      return this.assignments.studentsPage(id, request.user, query);
     return this.assignments.students(id, request.user);
   }
 }

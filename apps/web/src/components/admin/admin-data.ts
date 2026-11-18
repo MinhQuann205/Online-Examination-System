@@ -14,6 +14,7 @@ export type AdminUser = {
 };
 export type AdminClass = {
   id: string;
+  isArchived: boolean;
   name: string;
   code: string;
   description: string | null;

@@ -1,5 +1,6 @@
 'use client';
 import Link from 'next/link';
+import { HistoricalExamReport } from './results/exam-report';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowUpRight } from 'lucide-react';
@@ -12,8 +13,6 @@ import { EmptyState, StatusBadge } from '@/components/admin/admin-ui';
 import {
   ResultError,
   ResultsHeading,
-  ResultStatus,
-  resultDate,
   stateLabel,
   useResultActor,
   type ResultRole,
@@ -23,41 +22,6 @@ type ExamOption = {
   title: string;
   status: string;
   _count: { assignments: number; attempts: number };
-};
-type AttemptSummary = {
-  id: string;
-  status: string;
-  startedAt: string;
-  submittedAt: string | null;
-  score: string | null;
-  maxScore: string | null;
-  exam: { title: string; durationMin: number | null };
-};
-type Recipient = {
-  id: string;
-  fullName: string;
-  email: string;
-  attempts: AttemptSummary[];
-  isCurrentRecipient: boolean;
-  isActive: boolean;
-};
-type ExamReport = {
-  exam: { id: string; title: string };
-  assignments: Array<{
-    id: string;
-    class: { id: string; name: string } | null;
-    student: Recipient | null;
-    opensAt: string | null;
-    closesAt: string | null;
-    maxAttempts: number;
-    examVersion: {
-      id: string | null;
-      title: string;
-      number: number | null;
-      durationMin: number | null;
-    };
-    students: Recipient[];
-  }>;
 };
 export function TeacherResultsIndex() {
   const [page, setPage] = useState(1),
@@ -194,161 +158,17 @@ export function TeacherResultsIndex() {
 export function TeacherExamResults({
   examId,
   role = 'TEACHER',
+  initialFilters,
 }: {
   examId: string;
-  role?: Extract<ResultRole, 'TEACHER' | 'ADMIN'>;
+  role?: Extract<ResultRole, 'ADMIN' | 'TEACHER'>;
+  initialFilters?: import('@/lib/academic-navigation').ReportFilters;
 }) {
-  const { session, allowed, user } = useResultActor(role),
-    q = useQuery({
-      queryKey: ['exam-results', role, user?.id, examId],
-      queryFn: async () =>
-        (await api.examResults(examId)) as unknown as ExamReport,
-      enabled: allowed,
-      retry: false,
-      staleTime: 0,
-      gcTime: 0,
-    });
-  if (session.isError)
-    return (
-      <ResultError error={session.error} retry={() => void session.refetch()} />
-    );
-  if (!allowed || q.isPending) return <p role="status">Đang tải kết quả...</p>;
-  if (q.isError)
-    return <ResultError error={q.error} retry={() => void q.refetch()} />;
-  const data = q.data;
   return (
-    <div className="results-page">
-      <ResultsHeading
-        title={data.exam.title}
-        description="Báo cáo đề thi. Tên đề hiện tại ở tiêu đề; từng bài giao và lượt làm giữ thông tin lịch sử riêng."
-      >
-        <Button
-          type="button"
-          variant="outline"
-          disabled={q.isFetching}
-          onClick={() => void q.refetch()}
-        >
-          Làm mới báo cáo
-        </Button>
-      </ResultsHeading>
-      <p className="muted">
-        {data.assignments.length} bài giao trong báo cáo được phép xem. Danh
-        sách học viên và lượt làm dưới đây là toàn bộ dữ liệu endpoint này trả
-        về, không phải thống kê toàn hệ thống.
-      </p>
-      {data.assignments.map((asg) => (
-        <Card
-          className="results-report-card"
-          key={asg.id}
-          data-report-assignment={asg.id}
-        >
-          <header>
-            <div>
-              <StatusBadge tone="primary">
-                Phiên bản {asg.examVersion.number ?? 'không khả dụng'}
-              </StatusBadge>
-              <h2>{asg.examVersion.title}</h2>
-              <p>{asg.class?.name ?? asg.student?.fullName ?? 'Bài giao'}</p>
-            </div>
-          </header>
-          <dl className="results-meta">
-            <div>
-              <dt>Mở từ</dt>
-              <dd>
-                {asg.opensAt ? resultDate(asg.opensAt) : 'Không giới hạn'}
-              </dd>
-            </div>
-            <div>
-              <dt>Đóng lúc</dt>
-              <dd>
-                {asg.closesAt ? resultDate(asg.closesAt) : 'Không giới hạn'}
-              </dd>
-            </div>
-            <div>
-              <dt>Giới hạn lượt làm</dt>
-              <dd>{asg.maxAttempts} lượt / học viên</dd>
-            </div>
-          </dl>
-          {!asg.students.length ? (
-            <EmptyState title="Chưa có học viên trong phạm vi giao bài.">
-              Không có kết quả để hiển thị.
-            </EmptyState>
-          ) : (
-            <div
-              className="results-table-scroll"
-              role="region"
-              aria-label={`Lượt làm của ${asg.class?.name ?? asg.student?.fullName ?? asg.examVersion.title}`}
-              tabIndex={0}
-            >
-              <table>
-                <caption>Học viên và các lượt làm trong bài giao</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Học viên</th>
-                    <th scope="col">Bài thi của lượt làm</th>
-                    <th scope="col">Trạng thái</th>
-                    <th scope="col">Điểm</th>
-                    <th scope="col">Thời điểm nộp</th>
-                    <th scope="col">Thao tác</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {asg.students.flatMap((student) =>
-                    (student.attempts.length ? student.attempts : [null]).map(
-                      (attempt) => (
-                        <tr key={student.id + ':' + (attempt?.id ?? 'empty')}>
-                          <td>
-                            {student.fullName}
-                            <small>{student.email}</small>
-                            {!student.isCurrentRecipient && (
-                              <small>Học viên từng tham gia</small>
-                            )}
-                            {!student.isActive && (
-                              <small>Tài khoản đã khóa</small>
-                            )}
-                          </td>
-                          <td>{attempt?.exam.title ?? '—'}</td>
-                          <td>
-                            {attempt ? (
-                              <ResultStatus status={attempt.status} />
-                            ) : (
-                              'Chưa bắt đầu'
-                            )}
-                          </td>
-                          <td>
-                            {attempt?.score != null
-                              ? `${attempt.score} / ${attempt.maxScore ?? '—'}`
-                              : '—'}
-                          </td>
-                          <td>{resultDate(attempt?.submittedAt)}</td>
-                          <td>
-                            {attempt && attempt.status !== 'IN_PROGRESS' && (
-                              <Link
-                                className="results-exam-link"
-                                href={`/${role === 'ADMIN' ? 'admin' : 'teacher'}/results/${attempt.id}`}
-                              >
-                                Chi tiết
-                              </Link>
-                            )}
-                          </td>
-                        </tr>
-                      ),
-                    ),
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
-      ))}
-      {!data.assignments.length && (
-        <Card className="results-report-card">
-          <EmptyState title="Đề thi chưa có bài giao trong phạm vi của bạn.">
-            Chưa có báo cáo kết quả để hiển thị. Trạng thái nháp không tự tạo
-            hoặc xóa lịch sử lượt làm.
-          </EmptyState>
-        </Card>
-      )}
-    </div>
+    <HistoricalExamReport
+      examId={examId}
+      role={role}
+      initialFilters={initialFilters}
+    />
   );
 }

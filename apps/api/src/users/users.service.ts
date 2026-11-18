@@ -7,22 +7,24 @@ import {
 } from '@nestjs/common';
 import { Role, Prisma } from '../generated/prisma/client';
 import { z } from 'zod';
+import { normalizedEmailSchema } from '@exam/shared';
 import * as argon2 from 'argon2';
 import { randomBytes } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 
 const createSchema = z.object({
-  email: z.email().trim().toLowerCase(),
+  email: normalizedEmailSchema,
   fullName: z.string().trim().min(2).max(150),
   role: z.enum(['TEACHER', 'STUDENT']),
   password: z.string().min(12).max(128),
 });
 const patchSchema = z
   .object({
-    email: z.email().trim().toLowerCase().optional(),
+    email: normalizedEmailSchema.optional(),
     fullName: z.string().trim().min(2).max(150).optional(),
   })
   .refine((v) => Object.keys(v).length > 0);
+const statusSchema = z.object({ isActive: z.boolean() });
 const pageSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
@@ -102,6 +104,10 @@ export class UsersService {
       select: {
         ...safeSelect,
         memberships: {
+          where:
+            actor.role === 'TEACHER'
+              ? { class: { teacherId: actor.id } }
+              : undefined,
           select: {
             classId: true,
             class: {
@@ -116,7 +122,8 @@ export class UsersService {
       },
     });
     if (!user) throw new NotFoundException('Không tìm thấy người dùng');
-    if (actor.role === 'TEACHER' && user.role === 'STUDENT') {
+    if (actor.role === 'TEACHER' && actor.id !== id) {
+      if (user.role !== 'STUDENT') throw new ForbiddenException();
       const enrolled = await this.db.classMember.findFirst({
         where: { studentId: id, class: { teacherId: actor.id } },
       });
@@ -148,27 +155,42 @@ export class UsersService {
       throw e;
     }
   }
-  async status(id: string, active: boolean) {
-    const target = await this.db.user.findUnique({
-      where: { id },
-      select: { id: true, role: true, isActive: true },
-    });
-    if (!target) throw new NotFoundException();
-    if (target.role === 'ADMIN' && target.isActive && !active) {
-      const count = await this.db.user.count({
-        where: { role: 'ADMIN', isActive: true },
+  async status(id: string, input: unknown) {
+    const { isActive: active } = statusSchema.parse(input);
+    return this.db.$transaction(async (tx) => {
+      let target = await tx.user.findUnique({
+        where: { id },
+        select: { id: true, role: true, isActive: true },
       });
-      if (count <= 1)
-        throw new BadRequestException('Không thể khóa quản trị viên cuối cùng');
-    }
-    return this.db.user.update({
-      where: { id },
-      data: {
-        isActive: active,
-        refreshTokenHash: active ? undefined : null,
-        tokenVersion: { increment: 1 },
-      },
-      select: safeSelect,
+      if (!target) throw new NotFoundException();
+      if (target.role === 'ADMIN') {
+        // Lock the same ordered set before rereading/counting so two admins
+        // cannot simultaneously disable the last two active accounts.
+        await tx.$queryRaw`SELECT "id" FROM "User" WHERE "role" = 'ADMIN' ORDER BY "id" FOR UPDATE`;
+        target = await tx.user.findUnique({
+          where: { id },
+          select: { id: true, role: true, isActive: true },
+        });
+        if (!target) throw new NotFoundException();
+        if (
+          target.isActive &&
+          !active &&
+          (await tx.user.count({ where: { role: 'ADMIN', isActive: true } })) <=
+            1
+        )
+          throw new BadRequestException(
+            'Không thể khóa quản trị viên cuối cùng',
+          );
+      }
+      return tx.user.update({
+        where: { id },
+        data: {
+          isActive: active,
+          refreshTokenHash: active ? undefined : null,
+          tokenVersion: { increment: 1 },
+        },
+        select: safeSelect,
+      });
     });
   }
   async resetPassword(id: string) {

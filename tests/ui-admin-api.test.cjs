@@ -16,6 +16,35 @@ before(async () => {
 after(async () => {
   await db.end();
 });
+
+test('UI112 product: malformed account status never changes activity or session version', async () => {
+  const state = async () =>
+    (
+      await db.query(
+        'SELECT "isActive", "tokenVersion", "refreshTokenHash" IS NOT NULL AS has_refresh FROM "User" WHERE id=$1',
+        [f.studentA.id],
+      )
+    ).rows[0];
+  const before = await state();
+  for (const body of [
+    {},
+    { isActive: 'false' },
+    { isActive: 0 },
+    { isActive: null },
+  ]) {
+    await call(f.admin, 'PATCH', `/users/${f.studentA.id}/status`, body, 400);
+    assert.deepEqual(await state(), before);
+  }
+  await call(f.studentA, 'GET', '/auth/me', undefined, 200);
+  await call(
+    f.teacherA,
+    'PATCH',
+    `/users/${f.studentA.id}/status`,
+    { isActive: false },
+    403,
+  );
+  assert.deepEqual(await state(), before);
+});
 test('UI05 API: Admin dashboard identity and counts are real, safe and role restricted', async () => {
   const dashboard = (
     await call(f.admin, 'GET', '/dashboard/admin', undefined, 200)

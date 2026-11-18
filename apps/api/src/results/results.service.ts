@@ -21,10 +21,18 @@ type Actor = AuthRequest['user'];
 export class ResultsService {
   constructor(private readonly db: PrismaService) {}
 
-  async listStudent(actor: Actor, paging?: { skip: number; take: number }) {
+  async listStudent(
+    actor: Actor,
+    paging?: { skip: number; take: number },
+    filter?: Prisma.ExamAttemptWhereInput,
+  ) {
     if (actor.role !== 'STUDENT') throw new ForbiddenException();
     const attempts = await this.db.examAttempt.findMany({
-      where: { studentId: actor.id, status: { in: ['SUBMITTED', 'EXPIRED'] } },
+      where: {
+        studentId: actor.id,
+        status: { in: ['SUBMITTED', 'EXPIRED'] },
+        ...(filter ? { AND: [filter] } : {}),
+      },
       include: {
         exam: { select: { id: true, title: true } },
         assignment: { select: { showScore: true, showAnswers: true } },
@@ -34,6 +42,9 @@ export class ResultsService {
     });
     return attempts.map((attempt) => ({
       id: attempt.id,
+      assignmentId: attempt.assignmentId,
+      examVersionId: attempt.examVersionId,
+      version: attempt.examVersion,
       exam: {
         id: attempt.exam.id,
         ...historicalExamMetadata(attempt.examSnapshot),
@@ -48,15 +59,39 @@ export class ResultsService {
 
   async listStudentPage(actor: Actor, query: unknown) {
     if (actor.role !== 'STUDENT') throw new ForbiddenException();
-    const { page } = z
-      .object({ page: z.coerce.number().int().positive().default(1) })
+    const { page, search, status, assignmentId } = z
+      .object({
+        page: z.coerce.number().int().positive().max(1000000).default(1),
+        search: z.string().trim().max(200).optional(),
+        status: z.enum(['all', 'SUBMITTED', 'EXPIRED']).default('all'),
+        assignmentId: z.uuid().optional(),
+      })
       .parse(query);
+    const filter: Prisma.ExamAttemptWhereInput | undefined =
+      search || status !== 'all' || assignmentId
+        ? {
+            ...(search
+              ? {
+                  examSnapshot: {
+                    path: ['title'],
+                    string_contains: search,
+                    mode: 'insensitive',
+                  },
+                }
+              : {}),
+            ...(status !== 'all' ? { status } : {}),
+            ...(assignmentId ? { assignmentId } : {}),
+          }
+        : undefined;
     const [items, total] = await Promise.all([
-      this.listStudent(actor, { skip: (page - 1) * 20, take: 20 }),
+      filter
+        ? this.listStudent(actor, { skip: (page - 1) * 20, take: 20 }, filter)
+        : this.listStudent(actor, { skip: (page - 1) * 20, take: 20 }),
       this.db.examAttempt.count({
         where: {
           studentId: actor.id,
           status: { in: ['SUBMITTED', 'EXPIRED'] },
+          ...(filter ? { AND: [filter] } : {}),
         },
       }),
     ]);
@@ -174,6 +209,185 @@ export class ResultsService {
         };
       }),
     };
+  }
+
+  /** Finalized history only. Current-recipient progress is a separate population. */
+  async examPage(examId: string, actor: Actor, raw: unknown) {
+    if (actor.role !== 'TEACHER' && actor.role !== 'ADMIN')
+      throw new ForbiddenException();
+    const q = z
+      .object({
+        paged: z.literal('true'),
+        page: z.coerce.number().int().positive().max(1000000).default(1),
+        limit: z.coerce.number().int().min(1).max(100).default(20),
+        search: z.string().trim().max(200).default(''),
+        status: z.enum(['all', 'SUBMITTED', 'EXPIRED']).default('all'),
+        assignmentId: z.uuid().optional(),
+        versionId: z.uuid().optional(),
+        summaryOnly: z.literal('true').optional(),
+      })
+      .parse(raw);
+    return this.db.$transaction(
+      async (tx) => {
+        const exam = await tx.exam.findUnique({
+          where: { id: examId },
+          select: { id: true, title: true, authorId: true },
+        });
+        if (!exam) throw new NotFoundException('Không tìm thấy đề thi');
+        const assignmentWhere: Prisma.ExamAssignmentWhereInput = {
+          examId,
+          ...resultAssignmentScope(actor),
+          ...(q.assignmentId ? { id: q.assignmentId } : {}),
+        };
+        const accessible = await tx.examAssignment.findFirst({
+          where: assignmentWhere,
+          select: { id: true },
+        });
+        if (
+          (!accessible && q.assignmentId) ||
+          (actor.role === 'TEACHER' &&
+            exam.authorId !== actor.id &&
+            !accessible)
+        )
+          throw new ForbiddenException();
+        if (q.versionId) {
+          if (actor.role === 'TEACHER' && exam.authorId !== actor.id) {
+            const versionScope = await tx.examAssignment.findFirst({
+              where: {
+                AND: [
+                  assignmentWhere,
+                  {
+                    OR: [
+                      { examVersionId: q.versionId },
+                      { attempts: { some: { examVersionId: q.versionId } } },
+                    ],
+                  },
+                ],
+              },
+              select: { id: true },
+            });
+            if (!versionScope) throw new ForbiddenException();
+          }
+          if (
+            !(await tx.examVersion.findFirst({
+              where: { id: q.versionId, examId },
+              select: { id: true },
+            }))
+          )
+            throw new BadRequestException('Phiên bản không thuộc đề thi');
+        }
+        const where: Prisma.ExamAttemptWhereInput = {
+          examId,
+          assignment: { is: assignmentWhere },
+          status:
+            q.status === 'all' ? { in: ['SUBMITTED', 'EXPIRED'] } : q.status,
+          ...(q.versionId ? { examVersionId: q.versionId } : {}),
+          ...(q.search
+            ? {
+                student: {
+                  is: {
+                    OR: [
+                      { fullName: { contains: q.search, mode: 'insensitive' } },
+                      { email: { contains: q.search, mode: 'insensitive' } },
+                    ],
+                  },
+                },
+              }
+            : {}),
+        };
+        const total = await tx.examAttempt.count({ where });
+        const pageCount = Math.max(1, Math.ceil(total / q.limit)),
+          page = Math.min(q.page, pageCount);
+        const counts = await tx.examAttempt.groupBy({
+          by: ['status'],
+          where,
+          _count: { _all: true },
+        });
+        const scores = await tx.examAttempt.aggregate({
+          where: {
+            AND: [
+              where,
+              { score: { not: null, gte: 0 }, maxScore: { not: null, gt: 0 } },
+            ],
+          },
+          _count: { score: true },
+          _avg: { score: true },
+          _min: { score: true, maxScore: true },
+          _max: { score: true, maxScore: true },
+        });
+        const graded = scores._count.score;
+        const sameScale =
+          graded > 0 &&
+          scores._min.maxScore !== null &&
+          scores._max.maxScore !== null &&
+          scores._min.maxScore.eq(scores._max.maxScore);
+        const scoreSummary = {
+          availability: !graded
+            ? ('NO_SCORES' as const)
+            : sameScale
+              ? ('AVAILABLE' as const)
+              : ('MIXED_SCALES' as const),
+          gradedAttempts: graded,
+          average: sameScale ? (scores._avg.score?.toFixed(2) ?? null) : null,
+          minimum: sameScale ? (scores._min.score?.toFixed(2) ?? null) : null,
+          maximum: sameScale ? (scores._max.score?.toFixed(2) ?? null) : null,
+          scale: sameScale ? (scores._min.maxScore?.toFixed(2) ?? null) : null,
+        };
+        const rows = q.summaryOnly
+          ? []
+          : await tx.examAttempt.findMany({
+              where,
+              skip: (page - 1) * q.limit,
+              take: q.limit,
+              orderBy: [{ startedAt: 'desc' }, { id: 'desc' }],
+              select: {
+                id: true,
+                status: true,
+                assignmentId: true,
+                examVersionId: true,
+                examVersion: true,
+                examSnapshot: true,
+                startedAt: true,
+                submittedAt: true,
+                score: true,
+                maxScore: true,
+                student: {
+                  select: {
+                    id: true,
+                    fullName: true,
+                    email: true,
+                    isActive: true,
+                  },
+                },
+                assignment: {
+                  select: { class: { select: { id: true, name: true } } },
+                },
+              },
+            });
+        return {
+          exam: { id: exam.id, title: exam.title },
+          items: rows.map(({ examSnapshot, assignment, ...row }) => ({
+            ...row,
+            exam: historicalExamMetadata(examSnapshot),
+            class: assignment.class,
+          })),
+          total,
+          page,
+          limit: q.limit,
+          pageCount,
+          summary: {
+            finalized: total,
+            submitted:
+              counts.find((x) => x.status === 'SUBMITTED')?._count._all ?? 0,
+            expired:
+              counts.find((x) => x.status === 'EXPIRED')?._count._all ?? 0,
+            scores: scoreSummary,
+          },
+          population: 'FINALIZED_HISTORICAL_ATTEMPTS' as const,
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
   }
 
   async exam(examId: string, actor: Actor) {

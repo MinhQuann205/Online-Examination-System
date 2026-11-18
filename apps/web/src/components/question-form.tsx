@@ -1,8 +1,9 @@
 'use client';
-import { useState } from 'react';
+import { useState, useId } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { MatchingEditor, matchingInputError } from './matching-editor';
+import { prepareQuestion } from '@/lib/authoring-validation';
+import { MatchingEditor } from './matching-editor';
 export type FormQuestion = {
   type: string;
   content: string;
@@ -42,36 +43,43 @@ export function QuestionForm({
         { leftText: '', rightText: '' },
       ],
     );
+  const errorId = useId();
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [matchingError, setMatchingError] = useState<string | null>(null);
   return (
     <form
       className="space-y-3"
       onSubmit={(e) => {
         e.preventDefault();
-        const problem = type === 'MATCHING' ? matchingInputError(pairs) : null;
-        setMatchingError(problem);
-        if (problem) return;
-        onSubmit({
+        const parsed = prepareQuestion({
           type,
           content,
           topic,
           difficulty,
           explanation,
-          ...(type === 'MATCHING'
-            ? {
-                matchingPairs: pairs.map((p) => ({
-                  leftText: p.leftText.trim(),
-                  rightText: p.rightText.trim(),
-                })),
-              }
-            : { options }),
+          ...(type === 'MATCHING' ? { matchingPairs: pairs } : { options }),
         });
+        setFieldErrors(parsed.errors);
+        setMatchingError(parsed.errors.matchingPairs ?? null);
+        if (!parsed.ok) return;
+        onSubmit(parsed.body);
       }}
     >
+      {Object.keys(fieldErrors).length > 0 && (
+        <div role="alert" id={errorId}>
+          {Object.entries(fieldErrors).map(([field, message]) => (
+            <p key={field} data-field-error={field}>
+              {message}
+            </p>
+          ))}
+        </div>
+      )}
       <label>
         Nội dung câu hỏi
         <textarea
           aria-label="Nội dung câu hỏi"
+          aria-invalid={Boolean(fieldErrors.content)}
+          aria-describedby={fieldErrors.content ? errorId : undefined}
           maxLength={10000}
           required
           className="min-h-24 w-full rounded-lg border p-3 dark:bg-slate-900"
@@ -132,6 +140,14 @@ export function QuestionForm({
             <Input
               required
               aria-label={`Lựa chọn ${i + 1}`}
+              aria-invalid={Boolean(
+                fieldErrors[`options.${i}.content`] || fieldErrors.options,
+              )}
+              aria-describedby={
+                fieldErrors[`options.${i}.content`] || fieldErrors.options
+                  ? errorId
+                  : undefined
+              }
               maxLength={1000}
               placeholder={`Lựa chọn ${i + 1}`}
               value={o.content}
@@ -164,6 +180,19 @@ export function QuestionForm({
               />{' '}
               Đúng
             </label>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={options.length <= 2}
+              aria-label={`Xóa lựa chọn ${i + 1}`}
+              onClick={() =>
+                setOptions((current) =>
+                  current.filter((_, index) => index !== i),
+                )
+              }
+            >
+              Xóa
+            </Button>
           </div>
         ))
       )}

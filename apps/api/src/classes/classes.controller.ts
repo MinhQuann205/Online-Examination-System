@@ -31,8 +31,9 @@ export class ClassesController {
   @Get(':id') get(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Req() r: AuthRequest,
+    @Query() q: Record<string, string> = {},
   ) {
-    return this.service.get(id, r.user);
+    return this.service.getWithOptions(id, r.user, q);
   }
   @Patch(':id') @Roles('ADMIN', 'TEACHER') update(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -41,11 +42,15 @@ export class ClassesController {
   ) {
     return this.service.update(id, r.user, b);
   }
-  @Get(':id/students') students(
+  @Get(':id/students') @Roles('ADMIN', 'TEACHER', 'STUDENT') students(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Req() r: AuthRequest,
+    @Query() q: Record<string, string> = {},
   ) {
-    return this.service.get(id, r.user).then((c) => c.members);
+    if (Object.keys(q).length) return this.service.memberPage(id, r.user, q);
+    return this.service
+      .get(id, r.user)
+      .then((c) => ('members' in c ? c.members : []));
   }
   @Post(':id/students') @Roles('ADMIN', 'TEACHER') add(
     @Param('id', new ParseUUIDPipe()) id: string,

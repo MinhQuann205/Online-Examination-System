@@ -1,3 +1,4 @@
+const { clickWebAction } = require('./web-confirmation.cjs');
 const { test, before, after } = require('node:test');
 const { createRequire } = require('node:module');
 const path = require('node:path');
@@ -554,13 +555,9 @@ test('main E2E: Teacher creates 3 types, publishes/assigns; Student reloads/subm
     const published = teacher.waitForResponse(
       (r) => r.url().endsWith('/publish') && r.request().method() === 'POST',
     );
-    await teacher
-      .getByRole('button', { name: 'Xuất bản', exact: true })
-      .click();
+    await clickWebAction(teacher, 'Xuất bản');
     assert.equal((await published).status(), 201);
-    await teacher
-      .getByRole('button', { name: 'Giao bài', exact: true })
-      .click();
+    await clickWebAction(teacher, 'Giao bài');
     await teacher
       .getByRole('combobox', { name: /^Đề thi/ })
       .selectOption(exam.id);

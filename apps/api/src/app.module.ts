@@ -5,7 +5,7 @@ import { AuthController } from './auth/auth.controller';
 import { AuthService } from './auth/auth.service';
 import { AuthGuard, RolesGuard } from './auth/guards';
 import { DashboardController } from './dashboard/dashboard.controller';
-import { PrismaService } from './prisma/prisma.service';
+import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './users/users.module';
 import { ClassesModule } from './classes/classes.module';
 import { QuestionsModule } from './questions/questions.module';
@@ -16,6 +16,7 @@ import { ResultsModule } from './results/results.module';
 
 @Module({
   imports: [
+    PrismaModule,
     JwtModule.register({}),
     UsersModule,
     ClassesModule,
@@ -27,7 +28,6 @@ import { ResultsModule } from './results/results.module';
   ],
   controllers: [AuthController, DashboardController],
   providers: [
-    PrismaService,
     AuthService,
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },

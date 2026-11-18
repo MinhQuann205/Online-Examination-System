@@ -15,6 +15,138 @@ before(async () => {
 after(async () => {
   await db.end();
 });
+
+test('UI112 product: Teacher user details exclude other managers and unrelated memberships', async () => {
+  const owned = (
+    await call(
+      f.admin,
+      'POST',
+      '/classes',
+      {
+        name: 'UI112 scope A',
+        code: 'UI112-A-' + suffix,
+        teacherId: f.teacherA.id,
+      },
+      201,
+    )
+  ).data;
+  const unrelated = (
+    await call(
+      f.admin,
+      'POST',
+      '/classes',
+      {
+        name: 'UI112 scope B',
+        code: 'UI112-B-' + suffix,
+        teacherId: f.teacherB.id,
+      },
+      201,
+    )
+  ).data;
+  for (const c of [owned, unrelated])
+    await call(
+      f.admin,
+      'POST',
+      `/classes/${c.id}/students`,
+      { studentId: f.studentA.id },
+      201,
+    );
+  try {
+    const projected = (
+      await call(f.teacherA, 'GET', `/users/${f.studentA.id}`, undefined, 200)
+    ).data;
+    assert(projected.memberships.some((m) => m.classId === owned.id));
+    assert(!projected.memberships.some((m) => m.classId === unrelated.id));
+    assert(
+      projected.memberships.every((m) => m.class.teacher.id === f.teacherA.id),
+    );
+    assert(
+      !JSON.stringify(projected).match(
+        /passwordHash|refreshTokenHash|tokenVersion/,
+      ),
+    );
+    for (const user of [f.admin, f.teacherB])
+      await call(f.teacherA, 'GET', `/users/${user.id}`, undefined, 403);
+    await call(f.teacherA, 'GET', `/users/${f.teacherA.id}`, undefined, 200);
+    for (const viewer of [f.admin, f.studentA]) {
+      const detail = (
+        await call(viewer, 'GET', `/users/${f.studentA.id}`, undefined, 200)
+      ).data;
+      assert(detail.memberships.some((m) => m.classId === unrelated.id));
+    }
+    assert.equal(
+      Number(
+        (
+          await db.query(
+            'SELECT count(*) FROM "ClassMember" WHERE "studentId"=$1 AND "classId" IN ($2,$3)',
+            [f.studentA.id, owned.id, unrelated.id],
+          )
+        ).rows[0].count,
+      ),
+      2,
+    );
+  } finally {
+    for (const c of [owned, unrelated]) {
+      await call(
+        f.admin,
+        'DELETE',
+        `/classes/${c.id}/students/${f.studentA.id}`,
+        undefined,
+        200,
+      );
+      await call(
+        f.admin,
+        'PATCH',
+        `/classes/${c.id}`,
+        { isArchived: true },
+        200,
+      );
+    }
+  }
+});
+
+test('UI112 product: duplicate question content and invalid pagination are rejected by API', async () => {
+  for (const type of ['SINGLE_CHOICE', 'MULTIPLE_CHOICE', 'MATCHING']) {
+    const body = {
+      type,
+      content: 'UI112 ambiguous ' + suffix,
+      ...(type === 'MATCHING'
+        ? {
+            matchingPairs: [
+              { leftText: 'A', rightText: 'Same' },
+              { leftText: 'B', rightText: ' Same ' },
+            ],
+          }
+        : {
+            options: [
+              { content: 'Same', isCorrect: true },
+              { content: ' Same ', isCorrect: false },
+            ],
+          }),
+    };
+    await call(f.teacherA, 'POST', '/questions', body, 400);
+    assert.equal(
+      Number(
+        (
+          await db.query(
+            'SELECT count(*) FROM "Question" WHERE "authorId"=$1 AND content=$2',
+            [f.teacherA.id, body.content],
+          )
+        ).rows[0].count,
+      ),
+      0,
+    );
+  }
+  for (const endpoint of ['/questions', '/classes'])
+    for (const query of [
+      'page=1.5',
+      'page=Infinity',
+      'page=oops',
+      'limit=2.5',
+      'limit=101',
+    ])
+      await call(f.teacherA, 'GET', endpoint + '?' + query, undefined, 400);
+});
 test('UI06 API: Teacher identity, scoped totals and forbidden dashboard roles', async () => {
   const d = (
     await call(f.teacherA, 'GET', '/dashboard/teacher', undefined, 200)

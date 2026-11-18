@@ -2,6 +2,30 @@
 import { sessionDocumentId, sessionLifecycle } from './session-lifecycle';
 import type { CurrentUser } from '@exam/shared';
 
+export type AssignmentReview = {
+  body: {
+    examId: string;
+    examVersionId: string;
+    classId?: string;
+    studentId?: string;
+    opensAt?: string | null;
+    closesAt?: string | null;
+    maxAttempts: number;
+    showScore: boolean;
+    showAnswers: boolean;
+  };
+  exam: {
+    id: string;
+    title: string;
+    versionId: string;
+    version: number;
+    questionCount: number;
+    totalPoints: string;
+    durationMin: number;
+  };
+  recipient: { id: string; label: string; kind: 'class' | 'student' };
+  checkedAt: string;
+};
 export type ExamAssignment = {
   id: string;
   examId: string;
@@ -12,12 +36,14 @@ export type ExamAssignment = {
   maxAttempts: number;
   showScore: boolean;
   showAnswers: boolean;
+  createdById?: string;
   exam: {
     id: string;
     title: string;
     status: string;
     durationMin: number | null;
     metadataAvailable: boolean;
+    description?: string | null;
   };
   examVersion: { id: string; number: number; publishedAt: string } | null;
   class: { id: string; name: string; code: string } | null;
@@ -27,6 +53,7 @@ export type ExamAssignment = {
     id: string;
     status: 'IN_PROGRESS' | 'SUBMITTED' | 'EXPIRED';
     startedAt: string;
+    deadlineAt?: string | null;
     submittedAt: string | null;
   }>;
 };
@@ -120,12 +147,25 @@ async function request<T>(
   if (!response.ok) {
     const data = (await response.json().catch(() => ({}))) as {
       message?: string;
+      errors?: unknown;
     };
     if (!accountChange) sessionLifecycle.assertCurrent(session);
+    const messages =
+      response.status === 400 && Array.isArray(data.errors)
+        ? data.errors.flatMap((issue: unknown) => {
+            if (!issue || typeof issue !== 'object') return [];
+            const message = (issue as { message?: unknown }).message;
+            return typeof message === 'string' && message.trim()
+              ? [message.trim().slice(0, 200)]
+              : [];
+          })
+        : [];
+    const validationMessage = [...new Set(messages)].slice(0, 3).join('; ');
     throw new ApiError(
-      typeof data.message === 'string'
-        ? data.message
-        : `Request failed (${response.status})`,
+      validationMessage ||
+        (typeof data.message === 'string'
+          ? data.message
+          : `Request failed (${response.status})`),
       response.status,
     );
   }
@@ -172,6 +212,14 @@ export const api = {
     request<Array<{ id: string; number: number; publishedAt: string }>>(
       `/exams/${id}/versions`,
     ),
+  examVersionsPage: (id: string, query = '') =>
+    request<{
+      items: Array<{ id: string; number: number; publishedAt: string }>;
+      total: number;
+      page: number;
+      limit: number;
+      pageCount: number;
+    }>(`/exams/${id}/versions?paged=true&${query}`),
   markReview: (id: string, questionId: string, marked: boolean) =>
     request<{ saved: boolean; reviewQuestionIds: string[] }>(
       `/exam-attempts/${id}/review/${questionId}`,
@@ -214,6 +262,27 @@ export const api = {
     }>(`/classes?${params}`),
   createClass: (body: unknown) =>
     request('/classes', { method: 'POST', body: JSON.stringify(body) }),
+  classOverview: (id: string) =>
+    request<Record<string, any>>(
+      `/classes/${encodeURIComponent(id)}?members=none`,
+    ),
+  classMembersPage: (id: string, query: string) =>
+    request<{
+      items: Array<{
+        id: string;
+        studentId: string;
+        student: {
+          id: string;
+          fullName: string;
+          email: string;
+          isActive: boolean;
+        };
+      }>;
+      total: number;
+      page: number;
+      limit: number;
+      pageCount: number;
+    }>(`/classes/${encodeURIComponent(id)}/students?${query}`),
   classDetail: (id: string) => request<Record<string, any>>(`/classes/${id}`),
   updateClass: (id: string, body: unknown) =>
     request(`/classes/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
@@ -228,6 +297,7 @@ export const api = {
     request<{
       items: Array<Record<string, any>>;
       total: number;
+      page: number;
       pageCount: number;
     }>(`/questions?${params}`),
   createQuestion: (body: unknown) =>
@@ -245,8 +315,12 @@ export const api = {
     request<{ items: any[]; total: number; page: number; pageCount: number }>(
       `/exams${params ? `?${params}` : ''}`,
     ),
-  exam: (id: string) => request<any>(`/exams/${id}`),
-  examPreview: (id: string) => request<any>(`/exams/${id}/preview`),
+  exam: (id: string, query = '') =>
+    request<any>(`/exams/${id}${query ? '?' + query : ''}`),
+  examPreview: (id: string, versionId?: string) =>
+    request<any>(
+      `/exams/${id}/preview${versionId ? '?versionId=' + encodeURIComponent(versionId) : ''}`,
+    ),
   createExam: (body: unknown) =>
     request<{ id: string }>('/exams', {
       method: 'POST',
@@ -265,11 +339,66 @@ export const api = {
     request(`/exams/${id}/archive`, { method: 'POST' }),
   examAssignments: (params = '') =>
     request<{
+      serverNow?: string;
+      operations?: {
+        upcoming: number;
+        open: number;
+        closed: number;
+        population: 'FILTERED_ASSIGNMENTS';
+      };
       items: ExamAssignment[];
       total: number;
       page: number;
       pageCount: number;
     }>(`/exam-assignments${params ? `?${params}` : ''}`),
+  examAssignment: (id: string) =>
+    request<ExamAssignment>(`/exam-assignments/${encodeURIComponent(id)}`, {
+      signal: AbortSignal.timeout(15_000),
+    }),
+  examAssignmentRecipients: (id: string, query: string) =>
+    request<{
+      items: Array<{
+        id: string;
+        fullName: string;
+        email: string;
+        attempts: Array<{
+          id: string;
+          status: 'IN_PROGRESS' | 'SUBMITTED' | 'EXPIRED';
+          startedAt: string;
+          submittedAt: string | null;
+          score: string | null;
+        }>;
+      }>;
+      total: number;
+      page: number;
+      limit: number;
+      pageCount: number;
+    }>(`/exam-assignments/${encodeURIComponent(id)}/students?${query}`),
+  examAssignmentProgress: (id: string) =>
+    request<{
+      recipients: {
+        total: number;
+        notStarted: number;
+        inProgress: number;
+        completed: number;
+      };
+      attempts: {
+        total: number;
+        inProgress: number;
+        submitted: number;
+        expired: number;
+        finalized: number;
+      };
+      observedAt: string;
+    }>(`/exam-assignments/${encodeURIComponent(id)}/progress`, {
+      cache: 'no-store',
+    }),
+  reviewExamAssignment: (body: unknown) =>
+    request<AssignmentReview>('/exam-assignments/review', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15000),
+    }),
   createExamAssignment: (body: unknown) =>
     request<ExamAssignment>('/exam-assignments', {
       method: 'POST',
@@ -328,13 +457,17 @@ export const api = {
       total: number;
       pageCount: number;
     }>('/results?page=1'),
-  studentResultsPage: (page: number) =>
+  studentResultsPage: (page: number, query = '') =>
     request<{
       items: Array<Record<string, unknown>>;
       total: number;
       pageCount: number;
-    }>(`/results?page=${page}`),
+    }>(`/results?page=${page}${query ? '&' + query : ''}`),
   result: (id: string) => request<Record<string, unknown>>(`/results/${id}`),
+  examReportPage: (id: string, query: string) =>
+    request<import('./academic-report').AcademicReport>(
+      '/results/exams/' + id + '?' + query,
+    ),
   examResults: (id: string) =>
     request<Record<string, unknown>>(`/results/exams/${id}`),
 };

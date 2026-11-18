@@ -87,6 +87,29 @@ export function StudentDashboard() {
           retry={() => void dashboard.refetch()}
         />
       )}
+      <nav className="admin-row-actions" aria-label="Theo dõi bài thi">
+        <Link
+          className="admin-secondary-link"
+          href="/student/exams?view=in_progress"
+        >
+          Tiếp tục bài đang làm
+        </Link>
+        <Link
+          className="admin-secondary-link"
+          href="/student/exams?view=upcoming"
+        >
+          Bài sắp mở
+        </Link>
+        <Link className="admin-secondary-link" href="/student/exams?view=open">
+          Bài đang mở, chưa làm
+        </Link>
+        <Link
+          className="admin-secondary-link"
+          href="/student/exams?view=completed"
+        >
+          Bài đã hoàn tất
+        </Link>
+      </nav>
       <section className="student-stats-grid" aria-label="Tổng quan học tập">
         {cards.map((item) => (
           <Stat key={item.href} item={item} />
@@ -150,7 +173,7 @@ export function StudentDashboard() {
                   </p>
                   <p>Hạn đóng: {displayDate(item.closesAt)}</p>
                 </div>
-                <Link href="/student/exams">
+                <Link href={'/student/exams/' + item.id}>
                   Xem bài giao <ArrowUpRight size={16} />
                 </Link>
               </li>

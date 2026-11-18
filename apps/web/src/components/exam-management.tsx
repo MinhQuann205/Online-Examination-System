@@ -1,16 +1,36 @@
 'use client';
 
 import Link from 'next/link';
+import { preparationSummary } from '@/lib/examination-operations';
+import {
+  assignmentListHref,
+  readAssignmentListFilters,
+} from '@/lib/academic-navigation';
+import {
+  readExamFilters,
+  examListHref,
+  examContextHref,
+  type ExamFilters,
+} from '@/lib/management-page-state';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import { allPages } from '@/lib/all-pages';
+import { addQuestions } from '@/lib/question-selection';
+import { QuestionBankPreview } from '@/components/teacher/question-bank-preview';
+import { ExamVersionPicker } from './exam-version-picker';
+import { examAuthoringError } from '@/lib/authoring-validation';
 import { Pagination } from '@/components/pagination';
 import { Button } from '@/components/ui/button';
 import { ErrorState } from '@/components/teacher/teacher-ui';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { assignmentHref } from '@/lib/assignment-intent';
+import {
+  ExamLifecycleDialog,
+  type ExamLifecycleAction,
+} from '@/components/teacher/exam-lifecycle-dialog';
+import { examPreviewHref } from '@/lib/exam-preview-selection';
 
 type ExamState = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
 type Question = {
@@ -18,6 +38,7 @@ type Question = {
   type: 'SINGLE_CHOICE' | 'MULTIPLE_CHOICE' | 'MATCHING';
   content: string;
   topic?: string | null;
+  difficulty?: string;
 };
 type ExamSummary = {
   id: string;
@@ -25,16 +46,29 @@ type ExamSummary = {
   status: ExamState;
   durationMin: number;
   version: number;
+  structure?: {
+    kind: 'DRAFT' | 'PUBLISHED_SNAPSHOT' | 'UNAVAILABLE';
+    version: number;
+    questionCount: number | null;
+    totalPoints: string | null;
+    durationMin: number | null;
+  };
   _count: { assignments: number; attempts: number };
 };
 type ExamRecord = ExamSummary & {
   description: string | null;
-  questions: Array<{ questionId: string; points: number | string }>;
+  questions: Array<{
+    questionId: string;
+    points: number | string;
+    questionSnapshot?: { content?: string };
+  }>;
   versions: Array<{ id: string; number: number; publishedAt: string }>;
 };
 type ExamPreviewPayload = {
   draft: boolean;
   version?: number;
+  examVersionId?: string;
+  publishedAt?: string;
   snapshot: {
     title: string;
     description: string | null;
@@ -83,19 +117,32 @@ function useTeacherAccess() {
   return session;
 }
 
-export function ExamList() {
+export function ExamList({
+  initialFilters = readExamFilters({}),
+}: {
+  initialFilters?: ExamFilters;
+}) {
   const session = useTeacherAccess();
   const cache = useQueryClient();
-  const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [status, setStatus] = useState('');
+  const [filters, setFilters] = useState(initialFilters);
+  const { page, search, status } = filters;
+  function updateFilters(patch: Partial<ExamFilters>) {
+    const next = { ...filters, ...patch };
+    setFilters(next);
+    window.history.replaceState(null, '', examListHref(next));
+  }
   const [notice, setNotice] = useState('');
+  const [confirmation, setConfirmation] = useState<{
+    id: string;
+    title: string;
+    kind: ExamLifecycleAction;
+  } | null>(null);
   const query = new URLSearchParams({ page: String(page) });
   if (search.trim()) query.set('search', search.trim());
   if (status) query.set('status', status);
   const exams = useQuery({
-    queryKey: ['exams', search, status, page],
-    queryFn: () => api.exams(query.toString()),
+    queryKey: ['exams', 'structure', search.trim(), status, page],
+    queryFn: () => api.exams(query.toString() + '&overview=true'),
     enabled: session.data?.role === 'TEACHER',
   });
   const action = useMutation({
@@ -104,9 +151,13 @@ export function ExamList() {
       if (kind === 'version') return api.newExamVersion(id);
       return api.archiveExam(id);
     },
-    onSuccess: async () => {
+    onSuccess: async (_data, { id }) => {
       setNotice('Đã cập nhật đề thi.');
-      await cache.invalidateQueries({ queryKey: ['exams'] });
+      await Promise.all([
+        cache.invalidateQueries({ queryKey: ['exams'] }),
+        cache.invalidateQueries({ queryKey: ['exam', id] }),
+        cache.invalidateQueries({ queryKey: ['exam-preview', id] }),
+      ]);
     },
     onError: (error: Error) => setNotice(error.message),
   });
@@ -137,10 +188,10 @@ export function ExamList() {
           <Input
             aria-label="Tìm đề thi"
             placeholder="Tìm theo tên đề..."
+            maxLength={200}
             value={search}
             onChange={(event) => {
-              setSearch(event.target.value);
-              setPage(1);
+              updateFilters({ search: event.target.value, page: 1 });
             }}
           />
           <select
@@ -148,8 +199,7 @@ export function ExamList() {
             className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900"
             value={status}
             onChange={(event) => {
-              setStatus(event.target.value);
-              setPage(1);
+              updateFilters({ status: event.target.value, page: 1 });
             }}
           >
             <option value="">Mọi trạng thái</option>
@@ -173,16 +223,43 @@ export function ExamList() {
               >
                 <div className="min-w-0">
                   <Link
-                    href={`/teacher/exams/${exam.id}`}
+                    href={examContextHref(exam.id, filters)}
                     className="font-semibold text-blue-700 hover:underline dark:text-blue-300"
                   >
                     {exam.title}
                   </Link>
                   <p className="mt-1 text-sm text-slate-500">
-                    {stateLabels[exam.status as ExamState]} · {exam.durationMin}{' '}
-                    phút · phiên bản {exam.version} · {exam._count.assignments}{' '}
-                    lượt giao
+                    {stateLabels[exam.status as ExamState]} · phiên bản{' '}
+                    {exam.version} · {exam._count.assignments} lượt giao
                   </p>
+                  <p className="muted">
+                    {exam.structure && exam.structure.kind !== 'UNAVAILABLE' ? (
+                      <>
+                        {exam.structure.kind === 'DRAFT'
+                          ? 'Cấu hình nháp'
+                          : 'Snapshot đã xuất bản'}{' '}
+                        · {exam.structure.questionCount} câu · Tổng điểm cấu
+                        hình {exam.structure.totalPoints} ·{' '}
+                        {exam.structure.durationMin} phút
+                      </>
+                    ) : (
+                      'Cấu trúc phiên bản hiện tại không khả dụng'
+                    )}
+                  </p>
+                  <Link
+                    className="mr-3 text-sm underline"
+                    href={assignmentListHref(
+                      readAssignmentListFilters({ listExamId: exam.id }),
+                    )}
+                  >
+                    Bài đã giao
+                  </Link>
+                  <Link
+                    href={'/teacher/exams/' + exam.id + '/results'}
+                    className="text-sm underline"
+                  >
+                    Báo cáo lịch sử
+                  </Link>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {exam.status === 'DRAFT' && (
@@ -196,7 +273,11 @@ export function ExamList() {
                         type="button"
                         disabled={action.isPending}
                         onClick={() =>
-                          action.mutate({ id: exam.id, kind: 'publish' })
+                          setConfirmation({
+                            id: exam.id,
+                            title: exam.title,
+                            kind: 'publish',
+                          })
                         }
                       >
                         Xuất bản
@@ -209,7 +290,11 @@ export function ExamList() {
                       variant="outline"
                       disabled={action.isPending}
                       onClick={() =>
-                        action.mutate({ id: exam.id, kind: 'version' })
+                        setConfirmation({
+                          id: exam.id,
+                          title: exam.title,
+                          kind: 'version',
+                        })
                       }
                     >
                       Tạo phiên bản mới
@@ -221,7 +306,11 @@ export function ExamList() {
                       variant="ghost"
                       disabled={action.isPending}
                       onClick={() =>
-                        action.mutate({ id: exam.id, kind: 'archive' })
+                        setConfirmation({
+                          id: exam.id,
+                          title: exam.title,
+                          kind: 'archive',
+                        })
                       }
                     >
                       Lưu trữ
@@ -237,34 +326,37 @@ export function ExamList() {
             page={page}
             total={exams.data.total}
             pageCount={exams.data.pageCount}
-            onPage={setPage}
+            onPage={(page) => updateFilters({ page })}
             busy={exams.isFetching}
           />
         )}
       </Card>
+      {confirmation && (
+        <ExamLifecycleDialog
+          {...confirmation}
+          onClose={() => setConfirmation(null)}
+          onConfirm={async () => {
+            await action.mutateAsync({
+              id: confirmation.id,
+              kind: confirmation.kind,
+            });
+          }}
+        />
+      )}
     </div>
   );
 }
 
 export function ExamEditor({ examId }: { examId?: string }) {
   const session = useTeacherAccess();
-  const questions = useQuery({
-    queryKey: ['questions', 'exam-editor'],
-    queryFn: () =>
-      allPages((page) =>
-        api.questions(
-          new URLSearchParams({ limit: '20', page: String(page) }).toString(),
-        ),
-      ),
-    enabled: session.data?.role === 'TEACHER',
-  });
   const exam = useQuery({
-    queryKey: ['exam', examId],
-    queryFn: () => api.exam(examId!),
+    queryKey: ['exam', examId, 'lean'],
+    queryFn: () => api.exam(examId!, 'versions=none'),
     enabled: Boolean(examId && session.data?.role === 'TEACHER'),
   });
   if (session.isPending || !session.data)
     return <div className="p-8 text-slate-500">Đang xác thực phiên...</div>;
+  if (session.data.role !== 'TEACHER') return null;
   if (examId && exam.isPending)
     return <div className="p-8 text-slate-500">Đang tải đề thi...</div>;
   if (examId && (exam.isError || exam.data?.status !== 'DRAFT'))
@@ -281,9 +373,6 @@ export function ExamEditor({ examId }: { examId?: string }) {
       key={examId ?? 'new'}
       examId={examId}
       initialExam={exam.data as ExamRecord | undefined}
-      questions={questions.data as Question[] | undefined}
-      questionsPending={questions.isPending}
-      questionsError={questions.error?.message}
     />
   );
 }
@@ -291,15 +380,9 @@ export function ExamEditor({ examId }: { examId?: string }) {
 function ExamEditorForm({
   examId,
   initialExam,
-  questions,
-  questionsPending,
-  questionsError,
 }: {
   examId?: string;
   initialExam?: ExamRecord;
-  questions?: Question[];
-  questionsPending: boolean;
-  questionsError?: string;
 }) {
   const router = useRouter();
   const cache = useQueryClient();
@@ -323,9 +406,74 @@ function ExamEditorForm({
   );
   const [questionPage, setQuestionPage] = useState(1);
   const [questionSearch, setQuestionSearch] = useState('');
-  const filteredQuestions = (questions ?? []).filter((q) =>
-    q.content.toLowerCase().includes(questionSearch.toLowerCase()),
+  const [questionType, setQuestionType] = useState(''),
+    [questionTopic, setQuestionTopic] = useState(''),
+    [questionDifficulty, setQuestionDifficulty] = useState(''),
+    [defaultPoints, setDefaultPoints] = useState('1'),
+    [previewId, setPreviewId] = useState('');
+  const query = new URLSearchParams({
+    page: String(questionPage),
+    limit: '20',
+    search: questionSearch.trim(),
+    type: questionType,
+    topic: questionTopic.trim(),
+    difficulty: questionDifficulty,
+  });
+  const bank = useQuery({
+    queryKey: ['questions', 'exam-editor', query.toString()],
+    queryFn: () => api.questions(query.toString()),
+    retry: false,
+  });
+  const visibleQuestions = (bank.data?.items ?? []) as Question[];
+  const questionsPending = bank.isPending;
+  const questionsError = bank.error?.message;
+  const [questionNames, setQuestionNames] = useState<Record<string, string>>(
+    () =>
+      Object.fromEntries(
+        (initialExam?.questions ?? []).map((q) => [
+          q.questionId,
+          q.questionSnapshot?.content ?? q.questionId,
+        ]),
+      ),
   );
+  function selectQuestions(ids: string[], include: boolean) {
+    setNotice('');
+    if (include) {
+      try {
+        const next = addQuestions(order, points, ids, defaultPoints);
+        setOrder(next.order);
+        setPoints(next.points);
+        setQuestionNames((current) => {
+          const names = {
+            ...current,
+            ...Object.fromEntries(
+              visibleQuestions.map((q) => [q.id, q.content]),
+            ),
+          };
+          return Object.fromEntries(
+            next.order.map((id) => [id, names[id] ?? id]),
+          );
+        });
+      } catch (error) {
+        setNotice(
+          error instanceof Error ? error.message : 'Không thể chọn câu hỏi',
+        );
+      }
+    } else {
+      const removed = new Set(ids);
+      setQuestionNames((current) =>
+        Object.fromEntries(
+          Object.entries(current).filter(([id]) => !removed.has(id)),
+        ),
+      );
+      setOrder((current) => current.filter((id) => !removed.has(id)));
+      setPoints((current) =>
+        Object.fromEntries(
+          Object.entries(current).filter(([id]) => !removed.has(id)),
+        ),
+      );
+    }
+  }
   const move = (index: number, delta: number) =>
     setOrder((current) => {
       const next = [...current];
@@ -340,7 +488,7 @@ function ExamEditorForm({
         points: Number(points[questionId]),
       }));
       const body = {
-        title,
+        title: title.trim(),
         description: description.trim() || null,
         durationMin: Number(durationMin),
         questions: selected,
@@ -362,24 +510,15 @@ function ExamEditorForm({
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setNotice('');
-    if (order.length < 1 || order.length > 200) {
-      setNotice('Chọn từ 1 đến 200 câu hỏi trước khi lưu.');
-      return;
-    }
-    const cents = order.map((id) => Number(points[id]) * 100);
-    if (
-      cents.some(
-        (v) =>
-          !Number.isFinite(v) ||
-          v <= 0 ||
-          Math.abs(v - Math.round(v)) > 1e-7 ||
-          v > 99999999,
-      ) ||
-      cents.reduce((a, b) => a + Math.round(b), 0) > 99999999
-    ) {
-      setNotice(
-        'Điểm phải lớn hơn 0, tối đa hai chữ số thập phân và tổng không vượt 999999.99.',
-      );
+    const error = examAuthoringError({
+      title,
+      description,
+      durationMin,
+      order,
+      points,
+    });
+    if (error) {
+      setNotice(error);
       return;
     }
     save.mutate();
@@ -439,6 +578,7 @@ function ExamEditorForm({
                 </p>
                 <Input
                   aria-label="Tìm câu hỏi để chọn"
+                  maxLength={150}
                   value={questionSearch}
                   onChange={(event) => {
                     setQuestionSearch(event.target.value);
@@ -446,6 +586,106 @@ function ExamEditorForm({
                   }}
                   placeholder="Tìm câu hỏi..."
                 />
+                <div className="grid gap-3 my-3 sm:grid-cols-2">
+                  <label>
+                    Loại câu hỏi
+                    <select
+                      aria-label="Loại câu hỏi trong ngân hàng"
+                      value={questionType}
+                      onChange={(e) => {
+                        setQuestionType(e.target.value);
+                        setQuestionPage(1);
+                      }}
+                    >
+                      <option value="">Tất cả loại</option>
+                      {Object.entries(typeLabels).map(([key, label]) => (
+                        <option key={key} value={key}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Chủ đề
+                    <Input
+                      aria-label="Chủ đề trong ngân hàng"
+                      maxLength={120}
+                      placeholder="Nhập chủ đề"
+                      value={questionTopic}
+                      onChange={(e) => {
+                        setQuestionTopic(e.target.value);
+                        setQuestionPage(1);
+                      }}
+                    />
+                  </label>
+                  <label>
+                    Độ khó
+                    <select
+                      aria-label="Độ khó trong ngân hàng"
+                      value={questionDifficulty}
+                      onChange={(e) => {
+                        setQuestionDifficulty(e.target.value);
+                        setQuestionPage(1);
+                      }}
+                    >
+                      <option value="">Tất cả độ khó</option>
+                      <option value="EASY">Dễ</option>
+                      <option value="MEDIUM">Trung bình</option>
+                      <option value="HARD">Khó</option>
+                    </select>
+                  </label>
+                  <label>
+                    Điểm cho câu chọn mới
+                    <Input
+                      aria-label="Điểm cho câu chọn mới"
+                      type="number"
+                      min="0.01"
+                      max="999999.99"
+                      step="0.01"
+                      value={defaultPoints}
+                      onChange={(e) => setDefaultPoints(e.target.value)}
+                    />
+                  </label>
+                </div>
+                <div className="admin-row-actions">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={
+                      bank.isFetching ||
+                      Boolean(questionsError) ||
+                      !visibleQuestions.length
+                    }
+                    onClick={() =>
+                      selectQuestions(
+                        visibleQuestions.map((q) => q.id),
+                        true,
+                      )
+                    }
+                  >
+                    Chọn trang này
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={
+                      bank.isFetching ||
+                      !visibleQuestions.some((q) => order.includes(q.id))
+                    }
+                    onClick={() =>
+                      selectQuestions(
+                        visibleQuestions.map((q) => q.id),
+                        false,
+                      )
+                    }
+                  >
+                    Bỏ chọn trang này
+                  </Button>
+                  <span role="status">
+                    {bank.data?.total ?? 0} câu phù hợp · Đã chọn {order.length}
+                    /200
+                  </span>
+                </div>
                 {questionsPending ? (
                   <p className="text-slate-500">
                     Đang tải ngân hàng câu hỏi...
@@ -453,88 +693,101 @@ function ExamEditorForm({
                 ) : questionsError ? (
                   <p role="alert" className="text-red-600">
                     {questionsError}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void bank.refetch()}
+                    >
+                      Thử lại
+                    </Button>
                   </p>
-                ) : !questions?.length ? (
+                ) : !visibleQuestions.length ? (
                   <p className="text-slate-500">
-                    Ngân hàng chưa có câu hỏi. Hãy tạo câu hỏi trước khi soạn
-                    đề.
+                    Không có câu hỏi phù hợp với bộ lọc hiện tại.{' '}
+                    <Link
+                      className="admin-secondary-link"
+                      href="/teacher/questions"
+                    >
+                      Mở ngân hàng câu hỏi
+                    </Link>
                   </p>
                 ) : (
                   <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {filteredQuestions
-                      .slice((questionPage - 1) * 20, questionPage * 20)
-                      .map((question) => {
-                        const selected = Object.hasOwn(points, question.id);
-                        return (
-                          <li
-                            key={question.id}
-                            className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center"
-                          >
-                            <label className="flex min-w-0 flex-1 items-start gap-3">
-                              <input
-                                type="checkbox"
-                                checked={selected}
-                                onChange={(event) => {
-                                  const checked = event.target.checked;
-                                  setOrder((current) =>
-                                    checked
-                                      ? [...current, question.id]
-                                      : current.filter(
-                                          (id) => id !== question.id,
-                                        ),
-                                  );
-                                  setPoints((current) => {
-                                    const next = { ...current };
-                                    if (event.target.checked)
-                                      next[question.id] = '1';
-                                    else delete next[question.id];
-                                    return next;
-                                  });
-                                }}
-                                className="mt-1 h-4 w-4 accent-blue-600"
-                              />
-                              <span className="min-w-0">
-                                <span className="block font-medium">
-                                  {question.content}
-                                </span>
-                                <span className="mt-1 block text-xs text-slate-500">
-                                  {typeLabels[question.type]}
-                                  {question.topic ? ` · ${question.topic}` : ''}
-                                </span>
+                    {visibleQuestions.map((question) => {
+                      const selected = Object.hasOwn(points, question.id);
+                      return (
+                        <li
+                          key={question.id}
+                          className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center"
+                        >
+                          <label className="flex min-w-0 flex-1 items-start gap-3">
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              onChange={(event) => {
+                                selectQuestions(
+                                  [question.id],
+                                  event.target.checked,
+                                );
+                              }}
+                              className="mt-1 h-4 w-4 accent-blue-600"
+                            />
+                            <span className="min-w-0">
+                              <span className="block font-medium">
+                                {question.content}
                               </span>
+                              <span className="mt-1 block text-xs text-slate-500">
+                                {typeLabels[question.type]}
+                                {question.topic ? ` · ${question.topic}` : ''}
+                              </span>
+                            </span>
+                          </label>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => setPreviewId(question.id)}
+                            aria-label={`Xem trước ${question.content}`}
+                          >
+                            Xem trước
+                          </Button>
+                          {selected && (
+                            <label className="flex items-center gap-2 text-sm">
+                              Điểm
+                              <Input
+                                type="number"
+                                min="0.01"
+                                max="999999.99"
+                                step="0.01"
+                                required
+                                className="w-28"
+                                value={points[question.id]}
+                                onChange={(event) =>
+                                  setPoints((current) => ({
+                                    ...current,
+                                    [question.id]: event.target.value,
+                                  }))
+                                }
+                              />
                             </label>
-                            {selected && (
-                              <label className="flex items-center gap-2 text-sm">
-                                Điểm
-                                <Input
-                                  type="number"
-                                  min="0.01"
-                                  max="999999.99"
-                                  step="0.01"
-                                  required
-                                  className="w-28"
-                                  value={points[question.id]}
-                                  onChange={(event) =>
-                                    setPoints((current) => ({
-                                      ...current,
-                                      [question.id]: event.target.value,
-                                    }))
-                                  }
-                                />
-                              </label>
-                            )}
-                          </li>
-                        );
-                      })}
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
+                )}
+                {previewId && (
+                  <QuestionBankPreview
+                    id={previewId}
+                    onClose={() => setPreviewId('')}
+                  />
                 )}
               </Card>
               <Pagination
-                page={questionPage}
-                total={filteredQuestions.length}
-                pageCount={Math.ceil(filteredQuestions.length / 20)}
+                page={bank.data?.page ?? questionPage}
+                total={bank.data?.total ?? 0}
+                pageCount={bank.data?.pageCount ?? 0}
                 onPage={setQuestionPage}
-                busy={questionsPending}
+                busy={bank.isFetching}
               />
             </section>
             <aside className="teacher-editor-summary" aria-label="Cấu trúc đề">
@@ -556,8 +809,7 @@ function ExamEditorForm({
                 {order.map((id, index) => (
                   <div key={id} className="teacher-selection-row">
                     <span className="min-w-0 flex-1">
-                      {index + 1}.{' '}
-                      {questions?.find((q) => q.id === id)?.content ?? id}
+                      {index + 1}. {questionNames[id] ?? id}
                     </span>
                     <div>
                       <label>
@@ -643,18 +895,37 @@ function ExamEditorForm({
   );
 }
 
-export function ExamPreview({ examId }: { examId: string }) {
-  const router = useRouter();
+export function ExamPreview({
+  examId,
+  initialVersionId = '',
+  listContext = readExamFilters({}),
+}: {
+  examId: string;
+  initialVersionId?: string;
+  listContext?: ExamFilters;
+}) {
   const session = useTeacherAccess();
   const cache = useQueryClient();
+  const [selectedVersionId, setSelectedVersionId] = useState(initialVersionId);
+  function selectVersion(id: string) {
+    const verified = examPreviewHref(examId, id);
+    const href = verified ? examContextHref(examId, listContext, id) : null;
+    if (!href) return;
+    setSelectedVersionId(id);
+    window.history.replaceState(null, '', href);
+  }
+  const [confirmation, setConfirmation] = useState<ExamLifecycleAction | null>(
+    null,
+  );
+  const [notice, setNotice] = useState('');
   const exam = useQuery({
-    queryKey: ['exam', examId],
-    queryFn: () => api.exam(examId),
+    queryKey: ['exam', examId, 'lean'],
+    queryFn: () => api.exam(examId, 'versions=none'),
     enabled: session.data?.role === 'TEACHER',
   });
   const preview = useQuery({
-    queryKey: ['exam-preview', examId],
-    queryFn: () => api.examPreview(examId),
+    queryKey: ['exam-preview', examId, selectedVersionId],
+    queryFn: () => api.examPreview(examId, selectedVersionId || undefined),
     enabled: session.data?.role === 'TEACHER',
   });
   const action = useMutation({
@@ -664,13 +935,20 @@ export function ExamPreview({ examId }: { examId: string }) {
         : kind === 'version'
           ? api.newExamVersion(examId)
           : api.archiveExam(examId),
-    onSuccess: async () => {
+    onSuccess: async (_data, kind) => {
+      selectVersion('');
+      setNotice(
+        kind === 'publish'
+          ? 'Đã xuất bản. Chọn Giao bài để giao phiên bản này.'
+          : kind === 'version'
+            ? 'Đã tạo bản nháp mới. Chọn Chỉnh sửa để soạn tiếp.'
+            : 'Đã lưu trữ đề thi.',
+      );
       await Promise.all([
         cache.invalidateQueries({ queryKey: ['exam', examId] }),
         cache.invalidateQueries({ queryKey: ['exam-preview', examId] }),
         cache.invalidateQueries({ queryKey: ['exams'] }),
       ]);
-      router.refresh();
     },
   });
   if (session.isPending || !session.data || exam.isPending || preview.isPending)
@@ -678,6 +956,9 @@ export function ExamPreview({ examId }: { examId: string }) {
   if (exam.isError || preview.isError)
     return (
       <div className="teacher-page">
+        <Link className="admin-secondary-link" href={examListHref(listContext)}>
+          Danh sách đề theo bộ lọc
+        </Link>
         <ErrorState
           error={(exam.error ?? preview.error)!}
           retry={() => {
@@ -690,18 +971,43 @@ export function ExamPreview({ examId }: { examId: string }) {
   const examData = exam.data as ExamRecord;
   const previewData = preview.data as ExamPreviewPayload;
   const snapshot = previewData.snapshot;
+  const preparation = preparationSummary(
+    snapshot.title,
+    snapshot.durationMin,
+    snapshot.questions,
+  );
+  const versionToAssign = previewData.examVersionId;
+  const assignLink =
+    versionToAssign && examData.status !== 'ARCHIVED'
+      ? assignmentHref(examId, versionToAssign)
+      : null;
   return (
     <div className="teacher-page">
+      <Link className="admin-secondary-link" href={examListHref(listContext)}>
+        Danh sách đề theo bộ lọc
+      </Link>
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold">{examData.title}</h1>
+          <h1 className="text-3xl font-bold">{snapshot.title}</h1>
           <p className="mt-2 text-slate-500">
-            {stateLabels[examData.status]} · {snapshot.durationMin} phút ·{' '}
-            {snapshot.questions.length} câu
+            {selectedVersionId
+              ? `Đã xuất bản · v${previewData.version}`
+              : stateLabels[examData.status]}{' '}
+            · {snapshot.durationMin} phút · {snapshot.questions.length} câu
           </p>
+          {selectedVersionId && (
+            <p className="muted">
+              Trạng thái đề hiện tại: {stateLabels[examData.status]}. Bản đang
+              xem được giữ nguyên theo lịch sử xuất bản.
+            </p>
+          )}
         </div>
-        <div className="flex flex-wrap gap-2">
-          {examData.status === 'DRAFT' && (
+        <div
+          className="flex flex-wrap gap-2"
+          role="group"
+          aria-label="Thao tác đề thi"
+        >
+          {examData.status === 'DRAFT' && !selectedVersionId && (
             <>
               <Link href={`/teacher/exams/${examId}/edit`}>
                 <Button type="button" variant="outline">
@@ -711,50 +1017,127 @@ export function ExamPreview({ examId }: { examId: string }) {
               <Button
                 type="button"
                 disabled={action.isPending}
-                onClick={() => action.mutate('publish')}
+                onClick={() => setConfirmation('publish')}
+                aria-describedby="preparation-readiness"
               >
                 Xuất bản
               </Button>
             </>
           )}
-          {examData.status === 'PUBLISHED' && (
+          {previewData.examVersionId && (
+            <Link
+              href={assignmentListHref(
+                readAssignmentListFilters({
+                  listExamId: examId,
+                  listVersionId: previewData.examVersionId,
+                }),
+              )}
+            >
+              <Button variant="outline">Bài giao phiên bản này</Button>
+            </Link>
+          )}
+          {assignLink && (
+            <Link href={assignLink}>
+              <Button type="button" variant="outline">
+                {previewData.draft ? 'Giao phiên bản đã xuất bản' : 'Giao bài'}
+              </Button>
+            </Link>
+          )}
+          {examData.status === 'PUBLISHED' && !selectedVersionId && (
             <>
-              <Link href="/teacher/assignments">
-                <Button type="button" variant="outline">
-                  Giao bài
-                </Button>
-              </Link>
               <Button
                 type="button"
                 variant="outline"
                 disabled={action.isPending}
-                onClick={() => action.mutate('version')}
+                onClick={() => setConfirmation('version')}
               >
                 Tạo phiên bản mới
               </Button>
             </>
           )}
-          {examData.status !== 'ARCHIVED' && (
+          {examData.status !== 'ARCHIVED' && !selectedVersionId && (
             <Button
               type="button"
               variant="ghost"
               disabled={action.isPending}
-              onClick={() => action.mutate('archive')}
+              onClick={() => setConfirmation('archive')}
             >
               Lưu trữ
             </Button>
           )}
         </div>
       </header>
+      {notice && (
+        <p role="status" className="admin-notice">
+          {notice}
+        </p>
+      )}
+      {confirmation && (
+        <ExamLifecycleDialog
+          kind={confirmation}
+          title={snapshot.title}
+          onClose={() => setConfirmation(null)}
+          onConfirm={async () => {
+            await action.mutateAsync(confirmation);
+          }}
+        />
+      )}
+      {selectedVersionId && (
+        <p className="teacher-summary-ribbon">
+          Đang xem bản đã xuất bản v{previewData.version}. Không chỉnh sửa bản
+          lịch sử.{' '}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => selectVersion('')}
+          >
+            Về bản hiện tại
+          </Button>
+        </p>
+      )}
       {action.error && (
         <p role="alert" className="text-red-600">
           {action.error.message}
         </p>
       )}
+      <Card className="p-4 space-y-2" id="preparation-readiness">
+        <h2>Kiểm tra cấu trúc trước khi tổ chức thi</h2>
+        <p>
+          {preparation.questionCount} câu · Tổng điểm{' '}
+          {preparation.totalPoints ?? 'Chưa hợp lệ'} · {snapshot.durationMin}{' '}
+          phút
+        </p>
+        <p>
+          Chọn một: {preparation.types.SINGLE_CHOICE} · Chọn nhiều:{' '}
+          {preparation.types.MULTIPLE_CHOICE} · Ghép nối:{' '}
+          {preparation.types.MATCHING}
+        </p>
+        {preparation.blockers.length ? (
+          <ul>
+            {preparation.blockers.map((s) => (
+              <li key={s}>{s}</li>
+            ))}
+          </ul>
+        ) : (
+          <p>
+            Cấu hình hiển thị hợp lệ. Máy chủ vẫn kiểm tra lần cuối khi lưu/xuất
+            bản. Xuất bản chưa tự giao bài.
+          </p>
+        )}
+      </Card>
       <p className="teacher-summary-ribbon">
         {previewData.draft
           ? 'Bản nháp hiện tại — chưa giao cho học viên'
           : 'Phiên bản đã xuất bản — nội dung và điểm được đóng băng'}
+      </p>
+      <p className="muted">
+        Tổng điểm cấu hình:{' '}
+        {(
+          snapshot.questions.reduce(
+            (sum, question) => sum + Math.round(question.points * 100),
+            0,
+          ) / 100
+        ).toFixed(2)}
       </p>
       <Card className="space-y-5 p-5">
         <div>
@@ -800,19 +1183,16 @@ export function ExamPreview({ examId }: { examId: string }) {
           </article>
         ))}
       </Card>
-      {examData.versions.length > 0 && (
-        <Card className="p-5">
-          <h2 className="mb-3 font-semibold">Lịch sử phiên bản</h2>
-          <ul className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
-            {examData.versions.map((version) => (
-              <li key={version.id}>
-                Phiên bản {version.number} ·{' '}
-                {new Date(version.publishedAt).toLocaleString('vi-VN')}
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
+      <Card className="p-5">
+        <h2 className="mb-3 font-semibold">Lịch sử phiên bản</h2>
+        <ExamVersionPicker
+          key={examId}
+          examId={examId}
+          value={selectedVersionId}
+          onChange={selectVersion}
+          history
+        />
+      </Card>
     </div>
   );
 }

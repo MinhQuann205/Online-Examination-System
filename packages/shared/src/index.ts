@@ -3,8 +3,15 @@ import { z } from 'zod';
 export const roles = ['ADMIN', 'TEACHER', 'STUDENT'] as const;
 export type Role = (typeof roles)[number];
 
+export { questionInputSchema } from './question-input';
+export const normalizedEmailSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .pipe(z.email());
+
 export const loginSchema = z.object({
-  email: z.email().trim().toLowerCase(),
+  email: normalizedEmailSchema,
   password: z.string().min(1, 'Vui lòng nhập mật khẩu'),
 });
 export type LoginInput = z.infer<typeof loginSchema>;
@@ -21,3 +28,5 @@ export interface CurrentUser {
   fullName: string;
   role: Role;
 }
+
+export { validLocalDateTime, validPointText } from './authoring-values';

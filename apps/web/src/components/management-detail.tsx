@@ -33,7 +33,7 @@ export function ManagementDetail({ kind, id }: { kind: Kind; id: string }) {
       (kind === 'users'
         ? api.user(id)
         : kind === 'classes'
-          ? api.classDetail(id)
+          ? api.classOverview(id)
           : api.question(id)) as Promise<Detail>,
   });
   if (detail.isPending) return <p role="status">Đang tải chi tiết...</p>;

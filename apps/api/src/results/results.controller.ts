@@ -29,8 +29,11 @@ export class ResultsController {
   exam(
     @Param('examId', new ParseUUIDPipe()) examId: string,
     @Req() request: AuthRequest,
+    @Query() query: Record<string, string> = {},
   ) {
-    return this.results.exam(examId, request.user);
+    return Object.keys(query).length
+      ? this.results.examPage(examId, request.user, query)
+      : this.results.exam(examId, request.user);
   }
 
   @Get(':id')
