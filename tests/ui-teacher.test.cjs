@@ -1,3 +1,5 @@
+const { chooseAssignmentOption } = require('./assignment-selection.cjs');
+const { clickWebAction } = require('./web-confirmation.cjs');
 const { test, before, beforeEach, after } = require('node:test');
 const { createRequire } = require('node:module');
 const path = require('node:path'),
@@ -446,7 +448,7 @@ test('UI06-05: empty draft rejected locally; reordered cents persist, publish v1
     const exam = await (await post).json();
     await page.waitForURL('**/teacher/exams/' + exam.id);
     let pub = response(page, 'POST', '/exams/' + exam.id + '/publish');
-    await page.getByRole('button', { name: 'Xuất bản', exact: true }).click();
+    await clickWebAction(page, 'Xuất bản');
     const v1 = await (await pub).json();
     assert.deepEqual(
       v1.snapshot.questions.map((q) => q.questionId),
@@ -455,9 +457,7 @@ test('UI06-05: empty draft rejected locally; reordered cents persist, publish v1
     const frozen = (
       await db.query('SELECT snapshot FROM "ExamVersion" WHERE id=$1', [v1.id])
     ).rows[0].snapshot;
-    await page
-      .getByRole('button', { name: 'Tạo phiên bản mới', exact: true })
-      .click();
+    await clickWebAction(page, 'Tạo phiên bản mới');
     await page
       .getByRole('button', { name: 'Chỉnh sửa', exact: true })
       .waitFor();
@@ -474,7 +474,7 @@ test('UI06-05: empty draft rejected locally; reordered cents persist, publish v1
     assert.equal((await saved).status(), 200);
     await page.waitForURL('**/teacher/exams/' + exam.id);
     pub = response(page, 'POST', '/exams/' + exam.id + '/publish');
-    await page.getByRole('button', { name: 'Xuất bản', exact: true }).click();
+    await clickWebAction(page, 'Xuất bản');
     const v2 = await (await pub).json();
     assert.equal(v2.number, 2);
     assert.deepEqual(
@@ -486,15 +486,23 @@ test('UI06-05: empty draft rejected locally; reordered cents persist, publish v1
       frozen,
     );
     await page.goto(web + '/teacher/assignments');
-    await page.getByRole('combobox', { name: /^Đề thi/ }).selectOption(exam.id);
+    await chooseAssignmentOption(
+      page,
+      'Đề thi',
+      exam.id,
+      exam.title ?? 'UI06 editor ' + suffix,
+    );
     await page
       .getByLabel('Phiên bản đề thi', { exact: true })
       .selectOption(v1.id);
-    await page
-      .getByLabel('Lớp học', { exact: true })
-      .selectOption(f.classes.A.id);
+    await chooseAssignmentOption(
+      page,
+      'Lớp học',
+      f.classes.A.id,
+      f.classes.A.name,
+    );
     const as = response(page, 'POST', '/exam-assignments');
-    await page.getByRole('button', { name: 'Giao bài', exact: true }).click();
+    await clickWebAction(page, 'Giao bài');
     const asg = await (await as).json();
     assert.equal(asg.examVersion.id, v1.id);
     assert.equal(asg.exam.title, 'UI06 editor ' + suffix);

@@ -32,7 +32,10 @@ const req = createRequire(path.resolve(__dirname, '../apps/web/package.json')),
 let f, browser;
 before(async () => {
   f = await resultsFixtures();
-  browser = await chromium.launch({ channel: 'msedge', headless: true });
+  browser = await chromium.launch({
+    channel: process.env.P0_BROWSER_CHANNEL || 'msedge',
+    headless: true,
+  });
 });
 beforeEach(async () => {
   for (const actor of [f.admin, f.teacherA, f.teacherB, f.studentA, f.studentB])
@@ -67,8 +70,17 @@ async function context(actor = f.teacherA, width = 1440) {
 const screenshot = (p, name) =>
   p.screenshot({ path: path.join(evidence, name + '.png'), fullPage: true });
 const resultRoot = (p) => p.locator('[data-result-id]');
+// UI13 pages finalized attempts; scope readiness to the exact historical attempt.
 const report = (p) =>
-  p.locator('[data-report-assignment="' + f.cases.both.asg.id + '"]');
+  p
+    .locator(
+      'a[href^="/' +
+        (p.url().includes('/admin/') ? 'admin' : 'teacher') +
+        '/results/' +
+        f.cases.both.attempt.id +
+        '?"]',
+    )
+    .locator('..');
 async function readyResult(p, id) {
   await p.goto(web + '/student/results/' + id);
   await resultRoot(p).waitFor();
@@ -236,7 +248,7 @@ test('UI09 RESULT-06 BACK-09: Admin reports/detail stay in Admin shell and expos
     await bottomBack(p, 'Quay lại Theo dõi bài thi');
     await screenshot(p, 'admin-report');
     await report(p)
-      .locator(`a[href="/admin/results/${f.cases.both.attempt.id}"]`)
+      .locator(`a[href^="/admin/results/${f.cases.both.attempt.id}?"]`)
       .click();
     await resultRoot(p).waitFor();
     await sidebar(p, 'Theo dõi bài thi');
@@ -500,7 +512,9 @@ test('UI09 MATCH-01/02/03/04/05/06/07/08/09/10/13/14/15: author clear pairs and 
     await sidebar(sp, 'Kết quả của tôi');
     await screenshot(sp, 'matching-full-result-v1');
     await p.goto(web + '/teacher/exams/' + exam.id + '/results');
-    await p.locator('[data-report-assignment="' + asg.id + '"]').waitFor();
+    await p
+      .locator('a[href^="/teacher/results/' + attempt.id + '?"]')
+      .waitFor();
     await sidebar(p);
     await call(f.studentB, 'GET', '/results/' + attempt.id, undefined, 403);
     record(
@@ -703,11 +717,14 @@ test('UI09 RESULT-12/14: class reassignment makes cached Teacher report refetch 
       .getByRole('button', { name: 'Làm mới báo cáo', exact: true })
       .click();
     await p
-      .getByText('Đề thi chưa có bài giao trong phạm vi của bạn.', {
-        exact: true,
-      })
+      .getByText(
+        'Không có lượt hoàn tất phù hợp. Thử bỏ bộ lọc hoặc xem tiến độ bài giao.',
+        {
+          exact: true,
+        },
+      )
       .waitFor();
-    assert.equal(await p.locator('tbody').count(), 0);
+    assert.equal(await p.locator('.results-exam-row').count(), 0);
     await p.goto(web + '/teacher/results/' + f.cases.both.attempt.id);
     await p.locator('.results-error-box[role="alert"]').waitFor();
     assert.equal(await p.locator('.result-score-card').count(), 0);
@@ -764,9 +781,12 @@ test('UI09 RESULT-13/14/17: real Results search/paging/empty/loading/network ret
       .first()
       .click();
     await p
-      .getByText('Đề thi chưa có bài giao trong phạm vi của bạn.', {
-        exact: true,
-      })
+      .getByText(
+        'Không có lượt hoàn tất phù hợp. Thử bỏ bộ lọc hoặc xem tiến độ bài giao.',
+        {
+          exact: true,
+        },
+      )
       .waitFor();
     assert.equal(await p.locator('tbody tr').count(), 0);
     await p.goto(web + '/teacher/exams/' + f.c.exam.id + '/results');
@@ -776,7 +796,7 @@ test('UI09 RESULT-13/14/17: real Results search/paging/empty/loading/network ret
       .getByRole('button', { name: 'Làm mới báo cáo', exact: true })
       .click();
     await p.locator('.results-error-box[role="alert"]').waitFor();
-    assert.equal(await p.locator('[data-report-assignment]').count(), 0);
+    assert.equal(await p.locator('.results-exam-row').count(), 0);
     await p.unroute('**/results/exams/*');
     await p.getByRole('button', { name: 'Thử lại', exact: true }).click();
     await report(p).waitFor();
@@ -1137,7 +1157,7 @@ test('UI09 native zoom200: loaded long Matching result and Teacher report/form p
     `chrome.tabs.onUpdated.addListener((id,change,tab)=>{if(tab.url?.startsWith(${JSON.stringify(web)}))chrome.tabs.setZoom(id,2)});`,
   );
   const c = await chromium.launchPersistentContext(path.join(dir, 'profile'), {
-    channel: 'msedge',
+    channel: process.env.P0_BROWSER_CHANNEL || 'msedge',
     headless: true,
     viewport: null,
     args: [
@@ -1169,7 +1189,7 @@ test('UI09 native zoom200: loaded long Matching result and Teacher report/form p
       await p.goto(web + route);
       if (name === 'result') await resultRoot(p).waitFor();
       else if (name === 'report')
-        await p.locator('[data-report-assignment]').waitFor();
+        await p.locator('a[href^="/teacher/results/' + a.id + '?"]').waitFor();
       else {
         await p
           .getByLabel('Loại câu hỏi', { exact: true })

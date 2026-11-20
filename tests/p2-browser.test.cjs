@@ -1,3 +1,4 @@
+const { clickWebAction } = require('./web-confirmation.cjs');
 const { test, before, after } = require('node:test');
 const { createRequire } = require('node:module');
 const path = require('node:path');
@@ -430,9 +431,7 @@ test('P2 final combined UI E2E: Teacher creates 3 types, publishes/assigns; Stud
     const published = teacher.waitForResponse(
       (r) => r.url().endsWith('/publish') && r.request().method() === 'POST',
     );
-    await teacher
-      .getByRole('button', { name: 'Xuất bản', exact: true })
-      .click();
+    await clickWebAction(teacher, 'Xuất bản');
     const v1response = await published;
     assert.equal(v1response.status(), 201);
     const v1 = await v1response.json();
@@ -443,9 +442,7 @@ test('P2 final combined UI E2E: Teacher creates 3 types, publishes/assigns; Stud
     const newVersion = teacher.waitForResponse((r) =>
       r.url().endsWith('/new-version'),
     );
-    await teacher
-      .getByRole('button', { name: 'Tạo phiên bản mới', exact: true })
-      .click();
+    await clickWebAction(teacher, 'Tạo phiên bản mới');
     await newVersion;
     await teacher.goto(`${web}/teacher/exams/${exam.id}/edit`);
     await teacher.getByLabel('Điểm câu 1', { exact: true }).fill('9');
@@ -457,17 +454,13 @@ test('P2 final combined UI E2E: Teacher creates 3 types, publishes/assigns; Stud
     const published2 = teacher.waitForResponse((r) =>
       r.url().endsWith('/publish'),
     );
-    await teacher
-      .getByRole('button', { name: 'Xuất bản', exact: true })
-      .click();
+    await clickWebAction(teacher, 'Xuất bản');
     const v2Response = await published2;
     assert.equal(v2Response.status(), 201);
     const v2 = await v2Response.json();
     assert.equal(v2.snapshot.questions[0].points, 9);
     assert.equal(v2.snapshot.durationMin, 5);
-    await teacher
-      .getByRole('button', { name: 'Giao bài', exact: true })
-      .click();
+    await clickWebAction(teacher, 'Giao bài');
     await teacher
       .getByRole('combobox', { name: /^Đề thi/ })
       .selectOption(exam.id);

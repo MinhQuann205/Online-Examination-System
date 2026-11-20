@@ -9,8 +9,17 @@ import { Prisma } from '../generated/prisma/client';
 import { z } from 'zod';
 import type { AuthRequest } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
+import { snapshotStructure } from '../exams/exam-structure';
 import { resultAssignmentScope } from '../results/result-scope';
-import { historicalExamMetadata } from '../exams/exam-metadata';
+import {
+  historicalExamMetadata,
+  historicalExamDescription,
+} from '../exams/exam-metadata';
+
+import {
+  assignmentViewSchema,
+  studentAssignmentView,
+} from './student-assignment-view';
 
 const dateInput = z.string().datetime({ offset: true }).nullable().optional();
 const createSchema = z
@@ -130,7 +139,10 @@ export class ExamAssignmentsService {
     const metadata = new Map(
       versions.map((version) => [
         version.id,
-        historicalExamMetadata(version.snapshot),
+        {
+          ...historicalExamMetadata(version.snapshot),
+          description: historicalExamDescription(version.snapshot),
+        },
       ]),
     );
     return items.map((item) => ({
@@ -139,7 +151,10 @@ export class ExamAssignmentsService {
         ...item.exam,
         ...((item.examVersion
           ? metadata.get(item.examVersion.id)
-          : undefined) ?? historicalExamMetadata(null)),
+          : undefined) ?? {
+          ...historicalExamMetadata(null),
+          description: null,
+        }),
       },
     }));
   }
@@ -170,11 +185,55 @@ export class ExamAssignmentsService {
   async list(actor: AuthRequest['user'], rawQuery: unknown) {
     const query = z
       .object({
+        view: assignmentViewSchema.default('all'),
+        operations: z.literal('true').optional(),
+        scheduleOrder: z
+          .enum(['recent', 'opening', 'closing'])
+          .default('recent'),
         examId: z.uuid().optional(),
+        examVersionId: z.uuid().optional(),
+        classId: z.uuid().optional(),
+        recipientKind: z.enum(['all', 'class', 'student']).default('all'),
+        window: z.enum(['all', 'upcoming', 'open', 'closed']).default('all'),
         search: z.string().trim().max(200).optional(),
         page: z.coerce.number().int().min(1).default(1),
       })
       .parse(rawQuery);
+    if (
+      actor.role === 'STUDENT' &&
+      (query.operations ||
+        query.examVersionId ||
+        query.classId ||
+        query.recipientKind !== 'all' ||
+        query.window !== 'all')
+    )
+      throw new ForbiddenException(
+        'Bộ lọc quản lý dành cho giảng viên và quản trị viên',
+      );
+    if (query.classId && query.recipientKind === 'student')
+      throw new BadRequestException('Bài giao cá nhân không có lớp nhận');
+    const now = new Date();
+    const managementFilters: Prisma.ExamAssignmentWhereInput[] = [];
+    if (query.examVersionId)
+      managementFilters.push({ examVersionId: query.examVersionId });
+    if (query.classId) managementFilters.push({ classId: query.classId });
+    if (query.recipientKind === 'class')
+      managementFilters.push({ classId: { not: null } });
+    if (query.recipientKind === 'student')
+      managementFilters.push({ classId: null, studentId: { not: null } });
+    if (query.window === 'upcoming')
+      managementFilters.push({ opensAt: { gt: now } });
+    if (query.window === 'closed')
+      managementFilters.push({ closesAt: { lte: now } });
+    if (query.window === 'open')
+      managementFilters.push({
+        AND: [
+          { OR: [{ opensAt: null }, { opensAt: { lte: now } }] },
+          { OR: [{ closesAt: null }, { closesAt: { gt: now } }] },
+        ],
+      });
+    if (actor.role !== 'STUDENT' && query.view !== 'all')
+      throw new ForbiddenException('Bộ lọc tiến độ này dành cho học viên');
     const where: Prisma.ExamAssignmentWhereInput = {
       ...(query.examId ? { examId: query.examId } : {}),
       ...(query.search
@@ -191,34 +250,94 @@ export class ExamAssignmentsService {
           }
         : {}),
       ...this.readScope(actor),
+      ...(actor.role === 'STUDENT' && query.view !== 'all'
+        ? { AND: [studentAssignmentView(query.view, actor.id, now)] }
+        : managementFilters.length
+          ? { AND: managementFilters }
+          : {}),
     };
-    const [items, total] = await this.db.$transaction([
-      this.db.examAssignment.findMany({
-        where,
-        include: {
-          ...this.summary(actor),
-          ...(actor.role === 'STUDENT'
-            ? {
-                attempts: {
-                  where: { studentId: actor.id },
-                  select: {
-                    id: true,
-                    status: true,
-                    startedAt: true,
-                    submittedAt: true,
-                  },
-                  orderBy: { startedAt: 'desc' as const },
+    const readArgs = {
+      where,
+      include: {
+        ...this.summary(actor),
+        ...(actor.role === 'STUDENT'
+          ? {
+              attempts: {
+                where: { studentId: actor.id },
+                select: {
+                  id: true,
+                  status: true,
+                  startedAt: true,
+                  submittedAt: true,
+                  deadlineAt: true,
                 },
-              }
-            : {}),
-        },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        skip: (query.page - 1) * 20,
-        take: 20,
-      }),
-      this.db.examAssignment.count({ where }),
-    ]);
+                orderBy: { startedAt: 'desc' as const },
+              },
+            }
+          : {}),
+      },
+      orderBy:
+        query.scheduleOrder === 'opening'
+          ? [{ opensAt: { sort: 'asc', nulls: 'last' } }, { id: 'asc' }]
+          : query.scheduleOrder === 'closing'
+            ? [{ closesAt: { sort: 'asc', nulls: 'last' } }, { id: 'asc' }]
+            : [{ createdAt: 'desc' }, { id: 'desc' }],
+      skip: (query.page - 1) * 20,
+      take: 20,
+    } satisfies Prisma.ExamAssignmentFindManyArgs;
+    const { items, total, operationCounts } = query.operations
+      ? await this.db.$transaction(
+          async (tx) => {
+            const items = await tx.examAssignment.findMany(readArgs),
+              total = await tx.examAssignment.count({ where });
+            const operationCounts = await Promise.all([
+              tx.examAssignment.count({
+                where: { AND: [where, { opensAt: { gt: now } }] },
+              }),
+              tx.examAssignment.count({
+                where: {
+                  AND: [
+                    where,
+                    {
+                      AND: [
+                        { OR: [{ opensAt: null }, { opensAt: { lte: now } }] },
+                        { OR: [{ closesAt: null }, { closesAt: { gt: now } }] },
+                      ],
+                    },
+                  ],
+                },
+              }),
+              tx.examAssignment.count({
+                where: { AND: [where, { closesAt: { lte: now } }] },
+              }),
+            ]);
+
+            return { items, total, operationCounts };
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+        )
+      : await this.db
+          .$transaction([
+            this.db.examAssignment.findMany(readArgs),
+            this.db.examAssignment.count({ where }),
+          ])
+          .then(([items, total]) => ({
+            items,
+            total,
+            operationCounts: undefined,
+          }));
     return {
+      serverNow: now.toISOString(),
+      ...(operationCounts
+        ? {
+            operations: {
+              upcoming: operationCounts[0],
+              open: operationCounts[1],
+              closed: operationCounts[2],
+              population: 'FILTERED_ASSIGNMENTS' as const,
+            },
+          }
+        : {}),
       items: await this.withPinnedDuration(items),
       total,
       page: query.page,
@@ -226,7 +345,7 @@ export class ExamAssignmentsService {
     };
   }
 
-  async create(actor: AuthRequest['user'], raw: unknown) {
+  private async prepareCreation(actor: AuthRequest['user'], raw: unknown) {
     if (actor.role !== 'TEACHER' && actor.role !== 'ADMIN')
       throw new ForbiddenException();
     const input = createSchema.parse(raw);
@@ -246,28 +365,52 @@ export class ExamAssignmentsService {
         ...(input.examVersionId ? { id: input.examVersionId } : {}),
       },
       orderBy: [{ number: 'desc' }, { id: 'desc' }],
-      select: { id: true },
+      select: { id: true, number: true, snapshot: true },
     });
     if (!examVersion)
       throw new BadRequestException('Đề thi chưa có phiên bản đã xuất bản');
 
+    let recipient:
+      { id: string; label: string; kind: 'class' | 'student' } | undefined;
     if (input.classId) {
       const classroom = await this.db.class.findUnique({
         where: { id: input.classId },
-        select: { id: true, teacherId: true, isArchived: true },
+        select: {
+          id: true,
+          name: true,
+          code: true,
+          teacherId: true,
+          isArchived: true,
+        },
       });
       if (!classroom || classroom.isArchived)
         throw new NotFoundException('Không tìm thấy lớp đang hoạt động');
       if (actor.role === 'TEACHER' && classroom.teacherId !== actor.id)
         throw new ForbiddenException();
+      recipient = {
+        id: classroom.id,
+        label: classroom.name + ' · ' + classroom.code,
+        kind: 'class',
+      };
     }
     if (input.studentId) {
       const student = await this.db.user.findUnique({
         where: { id: input.studentId },
-        select: { id: true, role: true, isActive: true },
+        select: {
+          id: true,
+          fullName: true,
+          email: true,
+          role: true,
+          isActive: true,
+        },
       });
       if (!student || student.role !== 'STUDENT' || !student.isActive)
         throw new BadRequestException('Học viên không hợp lệ');
+      recipient = {
+        id: student.id,
+        label: student.fullName + ' · ' + student.email,
+        kind: 'student',
+      };
       if (actor.role === 'TEACHER') {
         const enrolled = await this.db.classMember.findFirst({
           where: { studentId: student.id, class: { teacherId: actor.id } },
@@ -277,6 +420,42 @@ export class ExamAssignmentsService {
       }
     }
 
+    return { input, exam, examVersion, recipient };
+  }
+
+  /** Read-only preparation: no assignment, attempt or scheduler write is performed. */
+  async review(actor: AuthRequest['user'], raw: unknown) {
+    if (actor.role !== 'TEACHER' && actor.role !== 'ADMIN')
+      throw new ForbiddenException();
+    const explicit = createSchema.parse(raw);
+    if (!explicit.examVersionId)
+      throw new BadRequestException(
+        'Chọn đúng phiên bản đã xuất bản trước khi kiểm tra',
+      );
+    const { input, examVersion, recipient } = await this.prepareCreation(
+      actor,
+      explicit,
+    );
+    const structure = snapshotStructure(examVersion.snapshot),
+      metadata = historicalExamMetadata(examVersion.snapshot);
+    if (!structure || !metadata.metadataAvailable || !recipient)
+      throw new BadRequestException('Snapshot hoặc người nhận không khả dụng');
+    return {
+      body: { ...input, examVersionId: examVersion.id },
+      exam: {
+        id: input.examId,
+        title: metadata.title,
+        versionId: examVersion.id,
+        version: examVersion.number,
+        ...structure,
+      },
+      recipient,
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  async create(actor: AuthRequest['user'], raw: unknown) {
+    const { input, exam, examVersion } = await this.prepareCreation(actor, raw);
     const created = await this.db.examAssignment.create({
       data: {
         examId: exam.id,
@@ -365,6 +544,187 @@ export class ExamAssignmentsService {
       });
     });
     return (await this.withPinnedDuration([updated]))[0];
+  }
+
+  async progress(id: string, actor: AuthRequest['user']) {
+    if (actor.role !== 'TEACHER' && actor.role !== 'ADMIN')
+      throw new ForbiddenException();
+    await this.authorize(id, actor);
+    return this.db.$transaction(
+      async (tx) => {
+        const assignment = await tx.examAssignment.findFirst({
+          where: { id, ...this.readScope(actor) },
+          select: { classId: true, studentId: true },
+        });
+        if (!assignment) throw new ForbiddenException();
+        const recipients: Prisma.UserWhereInput = {
+          role: 'STUDENT',
+          isActive: true,
+          ...(assignment.classId
+            ? { memberships: { some: { classId: assignment.classId } } }
+            : {
+                id:
+                  assignment.studentId ??
+                  '00000000-0000-4000-8000-000000000000',
+              }),
+        };
+        const total = await tx.user.count({ where: recipients });
+        const started = await tx.user.count({
+          where: {
+            AND: [recipients, { attempts: { some: { assignmentId: id } } }],
+          },
+        });
+        const inProgress = await tx.user.count({
+          where: {
+            AND: [
+              recipients,
+              {
+                attempts: { some: { assignmentId: id, status: 'IN_PROGRESS' } },
+              },
+            ],
+          },
+        });
+        const groups = await tx.examAttempt.groupBy({
+          by: ['status'],
+          where: {
+            assignmentId: id,
+            assignment: { is: this.readScope(actor) },
+          },
+          _count: { _all: true },
+        });
+        const counts = new Map(
+          groups.map((row) => [row.status, row._count._all]),
+        );
+        const active = counts.get('IN_PROGRESS') ?? 0,
+          submitted = counts.get('SUBMITTED') ?? 0,
+          expired = counts.get('EXPIRED') ?? 0;
+        return {
+          recipients: {
+            total,
+            notStarted: total - started,
+            inProgress,
+            completed: started - inProgress,
+          },
+          attempts: {
+            total: active + submitted + expired,
+            inProgress: active,
+            submitted,
+            expired,
+            finalized: submitted + expired,
+          },
+          observedAt: new Date().toISOString(),
+        };
+      },
+      { isolationLevel: 'RepeatableRead' },
+    );
+  }
+
+  async studentsPage(id: string, actor: AuthRequest['user'], raw: unknown) {
+    if (actor.role !== 'ADMIN' && actor.role !== 'TEACHER')
+      throw new ForbiddenException();
+    const q = z
+      .object({
+        paged: z.literal('true'),
+        page: z.coerce.number().int().min(1).max(1000000).default(1),
+        limit: z.coerce.number().int().min(1).max(100).default(20),
+        search: z.string().trim().max(150).optional(),
+        status: z
+          .enum(['all', 'not_started', 'in_progress', 'completed'])
+          .default('all'),
+      })
+      .parse(raw);
+    await this.authorize(id, actor);
+    return this.db.$transaction(
+      async (tx) => {
+        const assignment = await tx.examAssignment.findFirst({
+          where: { id, ...this.readScope(actor) },
+          select: { classId: true, studentId: true },
+        });
+        if (!assignment) throw new ForbiddenException();
+        const active = { assignmentId: id, status: 'IN_PROGRESS' as const };
+        const activity: Prisma.UserWhereInput =
+          q.status === 'not_started'
+            ? { attempts: { none: { assignmentId: id } } }
+            : q.status === 'in_progress'
+              ? { attempts: { some: active } }
+              : q.status === 'completed'
+                ? {
+                    AND: [
+                      {
+                        attempts: {
+                          some: {
+                            assignmentId: id,
+                            status: { in: ['SUBMITTED', 'EXPIRED'] },
+                          },
+                        },
+                      },
+                      { attempts: { none: active } },
+                    ],
+                  }
+                : {};
+        const where: Prisma.UserWhereInput = {
+          role: 'STUDENT',
+          isActive: true,
+          ...(assignment.classId
+            ? { memberships: { some: { classId: assignment.classId } } }
+            : {
+                id:
+                  assignment.studentId ??
+                  '00000000-0000-4000-8000-000000000000',
+              }),
+          AND: [
+            activity,
+            ...(q.search
+              ? [
+                  {
+                    OR: [
+                      {
+                        fullName: {
+                          contains: q.search,
+                          mode: 'insensitive' as const,
+                        },
+                      },
+                      {
+                        email: {
+                          contains: q.search,
+                          mode: 'insensitive' as const,
+                        },
+                      },
+                    ],
+                  },
+                ]
+              : []),
+          ],
+        };
+        const total = await tx.user.count({ where }),
+          pageCount = Math.ceil(total / q.limit),
+          page = Math.min(q.page, Math.max(1, pageCount));
+        const items = await tx.user.findMany({
+          where,
+          select: {
+            id: true,
+            fullName: true,
+            email: true,
+            attempts: {
+              where: { assignmentId: id },
+              select: {
+                id: true,
+                status: true,
+                startedAt: true,
+                submittedAt: true,
+                score: true,
+              },
+              orderBy: [{ startedAt: 'desc' }, { id: 'desc' }],
+            },
+          },
+          orderBy: [{ fullName: 'asc' }, { id: 'asc' }],
+          skip: (page - 1) * q.limit,
+          take: q.limit,
+        });
+        return { items, total, page, limit: q.limit, pageCount };
+      },
+      { isolationLevel: 'RepeatableRead' },
+    );
   }
 
   async students(id: string, actor: AuthRequest['user']) {

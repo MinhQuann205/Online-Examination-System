@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { CheckCircle2, BookOpenCheck, Clock3 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -86,9 +87,11 @@ function MatchingReview({
 export function ResultDetailView({
   attemptId,
   requiredRole,
+  returnHref,
 }: {
   attemptId: string;
   requiredRole: ResultRole;
+  returnHref?: string;
 }) {
   const { session, allowed, user } = useResultActor(requiredRole),
     query = useQuery({
@@ -170,6 +173,11 @@ export function ResultDetailView({
           <p>Giữ nguyên thang điểm của lượt làm.</p>
         </Card>
       </section>
+      {returnHref && (
+        <Link className="underline" href={returnHref}>
+          Quay lại báo cáo theo bộ lọc
+        </Link>
+      )}
       <section
         className="result-questions"
         aria-label="Danh sách câu trả lời chi tiết"

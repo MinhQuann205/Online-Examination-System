@@ -1,6 +1,12 @@
 'use client';
 import { useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { ClassRoster } from '@/components/class-roster';
+import {
+  readMemberFilters,
+  memberHref,
+  type MemberFilters,
+} from '@/lib/management-page-state';
 import { api } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -10,20 +16,31 @@ import {
   TeacherHeading,
   ErrorState,
   EmptyState,
-  DataTable,
   ConfirmationDialog,
   useTeacherAction,
 } from './teacher-ui';
 import { ManagementDetail } from '@/components/management-detail';
-export function TeacherClasses() {
+import { ClassArchiveAction } from '@/components/class-archive-action';
+export function TeacherClasses({
+  initialClassId = '',
+  initialRosterFilters = readMemberFilters({}),
+}: {
+  initialClassId?: string;
+  initialRosterFilters?: MemberFilters;
+}) {
   const [search, setSearch] = useState(''),
+    [archived, setArchived] = useState('false'),
     [page, setPage] = useState(1),
-    [chosen, setChosen] = useState('');
+    [chosen, setChosen] = useState(initialClassId);
   const list = useQuery({
-    queryKey: ['teacher-classes', search, page],
+    queryKey: ['teacher-classes', search, archived, page],
     queryFn: () =>
       api.classes(
-        new URLSearchParams({ search, page: String(page) }).toString(),
+        new URLSearchParams({
+          search,
+          archived,
+          page: String(page),
+        }).toString(),
       ),
   });
   return (
@@ -34,6 +51,22 @@ export function TeacherClasses() {
       />
       <Card className="teacher-panel">
         <div className="admin-toolbar">
+          <label>
+            Trạng thái lớp
+            <select
+              aria-label="Trạng thái lớp"
+              value={archived}
+              onChange={(event) => {
+                setArchived(event.target.value);
+                setPage(1);
+                setChosen('');
+              }}
+            >
+              <option value="false">Chưa lưu trữ</option>
+              <option value="true">Đã lưu trữ</option>
+              <option value="all">Tất cả lớp</option>
+            </select>
+          </label>
           <label>
             Tìm kiếm
             <Input
@@ -62,7 +95,14 @@ export function TeacherClasses() {
               <button
                 key={c.id}
                 className="teacher-question-row text-left"
-                onClick={() => setChosen(c.id)}
+                onClick={() => {
+                  setChosen(c.id);
+                  window.history.replaceState(
+                    null,
+                    '',
+                    memberHref('teacher', c.id, initialRosterFilters),
+                  );
+                }}
               >
                 <div>
                   <h2>{c.name}</h2>
@@ -72,7 +112,7 @@ export function TeacherClasses() {
                   </p>
                 </div>
                 <span className="admin-badge admin-badge-primary">
-                  Mở lớp →
+                  {c.isArchived ? 'Đã lưu trữ · Mở lớp →' : 'Mở lớp →'}
                 </span>
               </button>
             ))}
@@ -90,9 +130,13 @@ export function TeacherClasses() {
       </Card>
       {chosen && (
         <TeacherClassDetail
+          initialRosterFilters={initialRosterFilters}
           key={chosen}
           id={chosen}
-          onClose={() => setChosen('')}
+          onClose={() => {
+            setChosen('');
+            window.history.replaceState(null, '', '/teacher/classes');
+          }}
         />
       )}
     </div>
@@ -101,13 +145,15 @@ export function TeacherClasses() {
 function TeacherClassDetail({
   id,
   onClose,
+  initialRosterFilters,
 }: {
+  initialRosterFilters: MemberFilters;
   id: string;
   onClose: () => void;
 }) {
   const q = useQuery({
     queryKey: ['teacher-class', id],
-    queryFn: () => api.classDetail(id),
+    queryFn: () => api.classOverview(id),
     gcTime: 0,
     retry: false,
   });
@@ -155,6 +201,11 @@ function TeacherClassDetail({
       ) : (
         <>
           <ManagementDetail kind="classes" id={id} />
+          <ClassArchiveAction
+            id={id}
+            name={q.data.name}
+            archived={q.data.isArchived}
+          />
           <section className="admin-roster">
             <h3>Thành viên {q.data.name}</h3>
             <form
@@ -238,45 +289,12 @@ function TeacherClassDetail({
               </div>
             </form>
             {action.error && <ErrorState error={action.error} />}
-            <DataTable label="Thành viên lớp">
-              <thead>
-                <tr>
-                  <th scope="col">Học viên</th>
-                  <th scope="col">Email</th>
-                  <th scope="col">Thao tác</th>
-                </tr>
-              </thead>
-              <tbody>
-                {q.data.members.map(
-                  (m: {
-                    id: string;
-                    studentId: string;
-                    student: { fullName: string; email: string };
-                  }) => (
-                    <tr key={m.id}>
-                      <th scope="row">{m.student.fullName}</th>
-                      <td>{m.student.email}</td>
-                      <td>
-                        <Button
-                          variant="ghost"
-                          onClick={() =>
-                            setRemove({
-                              id: m.studentId,
-                              name: m.student.fullName,
-                            })
-                          }
-                        >
-                          Xóa
-                        </Button>
-                      </td>
-                    </tr>
-                  ),
-                )}
-              </tbody>
-            </DataTable>
-            {!q.data.members.length && (
-              <EmptyState title="Lớp chưa có học viên." />
-            )}
+            <ClassRoster
+              classId={id}
+              role="teacher"
+              initialFilters={initialRosterFilters}
+              onRemove={(id, name) => setRemove({ id, name })}
+            />
           </section>
         </>
       )}

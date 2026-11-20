@@ -228,3 +228,23 @@ test('GR06: clean TEMP, matching run, existing evidence, wrong run/database and 
     original,
   );
 });
+
+test('GR02: fixture pool bounds connections and remains lazy until identity verification', () => {
+  let connects = 0;
+  class FakePool {
+    constructor(options) {
+      this.options = options;
+    }
+    connect() {
+      connects++;
+      throw new Error('Unexpected connection');
+    }
+    query() {
+      throw new Error('Unexpected query');
+    }
+  }
+  const pool = createTestPool(FakePool, testDatabaseConfig(environment(15433)));
+  assert.equal(pool.options.max, 2);
+  assert.equal(pool.options.application_name, 'examspace-verified-test');
+  assert.equal(connects, 0);
+});

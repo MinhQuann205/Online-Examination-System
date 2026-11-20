@@ -3,6 +3,12 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart3, LockKeyhole, ArrowUpRight } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import {
+  readHistoryFilters,
+  historyHref,
+  type HistoryFilters,
+} from '@/lib/management-page-state';
 import { api } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -17,6 +23,9 @@ import {
 } from './student-ui';
 type Summary = {
   id: string;
+  assignmentId?: string;
+  examVersionId?: string | null;
+  version?: number;
   exam: {
     id: string;
     title: string;
@@ -29,11 +38,29 @@ type Summary = {
   score: string | null;
   maxScore: string | null;
 };
-export function StudentResultsIndex() {
-  const [page, setPage] = useState(1);
+export function StudentResultsIndex({
+  initialFilters = readHistoryFilters({}),
+}: {
+  initialFilters?: HistoryFilters;
+}) {
+  const [filters, setFilters] = useState(initialFilters);
+  const { page, search, status, assignmentId } = filters;
+  function updateFilters(patch: Partial<HistoryFilters>) {
+    const next = { ...filters, ...patch };
+    setFilters(next);
+    window.history.replaceState(null, '', historyHref(next));
+  }
   const q = useQuery({
-    queryKey: ['student-results', page],
-    queryFn: () => api.studentResultsPage(page),
+    queryKey: ['student-results', page, search.trim(), status, assignmentId],
+    queryFn: () =>
+      api.studentResultsPage(
+        page,
+        new URLSearchParams({
+          search,
+          status,
+          ...(assignmentId ? { assignmentId } : {}),
+        }).toString(),
+      ),
     staleTime: 0,
     gcTime: 0,
   });
@@ -67,6 +94,42 @@ export function StudentResultsIndex() {
             Làm mới
           </Button>
         </div>
+        <div className="admin-toolbar">
+          <label>
+            Tìm đề trong lịch sử
+            <Input
+              aria-label="Tìm đề trong lịch sử"
+              maxLength={200}
+              value={search}
+              onChange={(e) =>
+                updateFilters({ search: e.target.value, page: 1 })
+              }
+            />
+          </label>
+          <label>
+            Trạng thái lượt làm
+            <select
+              aria-label="Lọc trạng thái kết quả"
+              value={status}
+              onChange={(e) =>
+                updateFilters({ status: e.target.value, page: 1 })
+              }
+            >
+              <option value="all">Đã hoàn tất</option>
+              <option value="SUBMITTED">Đã nộp</option>
+              <option value="EXPIRED">Hết giờ</option>
+            </select>
+          </label>
+          {assignmentId && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => updateFilters({ assignmentId: '', page: 1 })}
+            >
+              Bỏ lọc bài giao
+            </Button>
+          )}
+        </div>
         {q.isError ? (
           <ErrorState error={q.error} retry={() => void q.refetch()} />
         ) : q.isPending ? (
@@ -88,6 +151,11 @@ export function StudentResultsIndex() {
                       {item.status === 'EXPIRED' ? 'Hết giờ' : 'Đã nộp'}
                     </StatusBadge>
                     <h2>{item.exam.title}</h2>
+                    {item.version !== undefined && (
+                      <p className="muted">
+                        Phiên bản khi làm: v{item.version}
+                      </p>
+                    )}
                     <p className="muted">
                       Thời lượng bản đề:{' '}
                       {item.exam.durationMin === null
@@ -120,6 +188,14 @@ export function StudentResultsIndex() {
                     >
                       Xem bài làm <ArrowUpRight size={16} />
                     </Link>
+                    {item.assignmentId && (
+                      <Link
+                        className="admin-secondary-link"
+                        href={'/student/exams/' + item.assignmentId}
+                      >
+                        Xem bài giao
+                      </Link>
+                    )}
                   </div>
                 </article>
               ))}
@@ -132,7 +208,7 @@ export function StudentResultsIndex() {
               total={q.data.total}
               pageCount={q.data.pageCount}
               busy={q.isFetching}
-              onPage={setPage}
+              onPage={(page) => updateFilters({ page })}
             />
           </>
         )}

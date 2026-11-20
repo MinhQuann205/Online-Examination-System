@@ -19,12 +19,14 @@ export function allowedRoute(
     TEACHER: new RegExp(
       '^(/dashboard/teacher|/teacher/(classes|questions|assignments|results|exams)|/teacher/exams/new|/teacher/exams/' +
         id +
-        '(/edit|/results)?|/teacher/results/' +
+        '(/edit|/results)?|/teacher/assignments/' +
+        id +
+        '|/teacher/results/' +
         id +
         ')$',
     ),
     STUDENT: new RegExp(
-      '^(/dashboard/student|/student/(classes|exams|results)|/student/(attempts|results)/' +
+      '^(/dashboard/student|/student/(classes|exams|results)|/student/(attempts|results|exams)/' +
         id +
         ')$',
     ),
@@ -35,12 +37,16 @@ export function parentRoute(route: string, role: CurrentUser['role']): string {
   if (route === '/dashboard/' + role.toLowerCase()) return '/';
   if (role === 'STUDENT' && route.startsWith('/student/attempts/'))
     return '/student/exams';
+  if (role === 'STUDENT' && route.startsWith('/student/exams/'))
+    return '/student/exams';
   if (role === 'STUDENT' && route.startsWith('/student/results/'))
     return '/student/results';
   if (role === 'TEACHER' && route.startsWith('/teacher/exams/'))
     return '/teacher/exams';
   if (role === 'TEACHER' && route.startsWith('/teacher/results/'))
     return '/teacher/results';
+  if (role === 'TEACHER' && route.startsWith('/teacher/assignments/'))
+    return '/teacher/assignments';
   return '/dashboard/' + role.toLowerCase();
 }
 export class InternalNavigation {
@@ -90,6 +96,11 @@ export function contextualBack(
 ): { fallback: string; label: string } | null {
   if (!allowedRoute(route, role)) return null;
   if (role === 'TEACHER') {
+    if (route.startsWith('/teacher/assignments/'))
+      return {
+        fallback: '/teacher/assignments',
+        label: 'Quay lại bài đã giao',
+      };
     if (
       /^\/teacher\/results\//.test(route) ||
       /^\/teacher\/exams\/.+\/results$/.test(route)
@@ -107,6 +118,8 @@ export function contextualBack(
   }
   if (role === 'STUDENT' && route.startsWith('/student/results/'))
     return { fallback: '/student/results', label: 'Quay lại lịch sử kết quả' };
+  if (role === 'STUDENT' && route.startsWith('/student/exams/'))
+    return { fallback: '/student/exams', label: 'Quay lại bài thi được giao' };
   if (
     role === 'ADMIN' &&
     (route.startsWith('/admin/exams/') || route.startsWith('/admin/results/'))

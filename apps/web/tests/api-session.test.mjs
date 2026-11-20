@@ -11,7 +11,12 @@ async function client() {
       new URL('../src/lib/session-lifecycle.ts', import.meta.url),
       'utf8',
     ),
-    { compilerOptions: { module: ts.ModuleKind.ESNext } },
+    {
+      compilerOptions: {
+        module: ts.ModuleKind.ESNext,
+        target: ts.ScriptTarget.ES2017,
+      },
+    },
   ).outputText;
   const source = fs
     .readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8')
@@ -23,7 +28,10 @@ async function client() {
     await import(
       url(
         ts.transpileModule(source, {
-          compilerOptions: { module: ts.ModuleKind.ESNext },
+          compilerOptions: {
+            module: ts.ModuleKind.ESNext,
+            target: ts.ScriptTarget.ES2017,
+          },
         }).outputText,
       )
     )
@@ -162,5 +170,97 @@ test('a stalled refresh times out before logout proceeds, without overlapping co
   } finally {
     globalThis.fetch = originalFetch;
     AbortSignal.timeout = originalTimeout;
+  }
+});
+
+test('question validation displays server field messages and preserves status 400', async () => {
+  const api = await client();
+  const original = globalThis.fetch;
+  globalThis.fetch = async () =>
+    Response.json(
+      {
+        message: 'Validation failed',
+        errors: [
+          {
+            path: ['matchingPairs'],
+            message: 'Các đáp án ghép phải khác nhau',
+          },
+        ],
+      },
+      { status: 400 },
+    );
+  try {
+    await assert.rejects(
+      api.createQuestion({}),
+      (error) =>
+        error.status === 400 &&
+        error.message.includes('Các đáp án ghép phải khác nhau'),
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('malformed validation details fall back safely instead of hiding the API error', async () => {
+  const api = await client();
+  const original = globalThis.fetch;
+  globalThis.fetch = async () =>
+    Response.json(
+      { message: 'Validation failed', errors: [null, {}, { message: 42 }] },
+      { status: 400 },
+    );
+  try {
+    await assert.rejects(
+      api.createQuestion({}),
+      (error) => error.status === 400 && error.message === 'Validation failed',
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('validation feedback deduplicates and bounds displayed messages', async () => {
+  const api = await client();
+  const original = globalThis.fetch;
+  globalThis.fetch = async () =>
+    Response.json(
+      {
+        message: 'Validation failed',
+        errors: ['First', 'First', 'Second', 'Third', 'Fourth'].map(
+          (message) => ({ message }),
+        ),
+      },
+      { status: 400 },
+    );
+  try {
+    await assert.rejects(
+      api.createQuestion({}),
+      (error) =>
+        error.status === 400 && error.message === 'First; Second; Third',
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('non-validation server errors do not display arbitrary issue details', async () => {
+  const api = await client();
+  const original = globalThis.fetch;
+  globalThis.fetch = async () =>
+    Response.json(
+      {
+        message: 'Internal server error',
+        errors: [{ message: 'internal-debug-detail' }],
+      },
+      { status: 500 },
+    );
+  try {
+    await assert.rejects(
+      api.createQuestion({}),
+      (error) =>
+        error.status === 500 && error.message === 'Internal server error',
+    );
+  } finally {
+    globalThis.fetch = original;
   }
 });

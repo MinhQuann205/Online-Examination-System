@@ -111,6 +111,8 @@ function createTestPool(Pool, config) {
   const pool = new Pool({
     connectionString: config.connectionString,
     application_name: 'examspace-verified-test',
+    // Leave capacity for the shared API pool and read-only test observer.
+    max: 2,
   });
   const connect = pool.connect.bind(pool),
     query = pool.query.bind(pool);

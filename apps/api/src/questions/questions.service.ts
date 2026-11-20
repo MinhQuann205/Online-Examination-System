@@ -4,64 +4,19 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, QuestionType, Difficulty } from '../generated/prisma/client';
+import { Prisma } from '../generated/prisma/client';
 import { z } from 'zod';
+import { questionInputSchema } from '@exam/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthRequest } from '../auth/auth.types';
-const option = z.object({
-  content: z.string().trim().min(1).max(1000),
-  isCorrect: z.boolean(),
+import { listPaginationSchema } from '../common/list-pagination';
+const schema = questionInputSchema;
+const filterSchema = listPaginationSchema.extend({
+  search: z.string().trim().max(150).optional(),
+  type: z.enum(['', 'SINGLE_CHOICE', 'MULTIPLE_CHOICE', 'MATCHING']).optional(),
+  difficulty: z.enum(['', 'EASY', 'MEDIUM', 'HARD']).optional(),
+  topic: z.string().trim().max(120).optional(),
 });
-const pair = z.object({
-  leftText: z.string().trim().min(1).max(500),
-  rightText: z.string().trim().min(1).max(500),
-});
-const schema = z
-  .object({
-    type: z.enum(['SINGLE_CHOICE', 'MULTIPLE_CHOICE', 'MATCHING']),
-    content: z.string().trim().min(1).max(10000),
-    explanation: z.string().trim().max(5000).optional(),
-    difficulty: z.enum(['EASY', 'MEDIUM', 'HARD']).default('MEDIUM'),
-    topic: z.string().trim().max(120).optional(),
-    options: z.array(option).optional(),
-    matchingPairs: z.array(pair).optional(),
-  })
-  .superRefine((v, c) => {
-    if (v.type === 'MATCHING') {
-      if (!v.matchingPairs || v.matchingPairs.length < 2)
-        c.addIssue({
-          code: 'custom',
-          message: 'Cần ít nhất hai cặp ghép',
-          path: ['matchingPairs'],
-        });
-      if (v.options?.length)
-        c.addIssue({
-          code: 'custom',
-          message: 'Câu ghép không dùng options',
-          path: ['options'],
-        });
-    } else {
-      if (!v.options || v.options.length < 2)
-        c.addIssue({
-          code: 'custom',
-          message: 'Cần ít nhất hai lựa chọn',
-          path: ['options'],
-        });
-      const correct = v.options?.filter((o) => o.isCorrect).length ?? 0;
-      if (correct === 0 || (v.type === 'SINGLE_CHOICE' && correct !== 1))
-        c.addIssue({
-          code: 'custom',
-          message: 'Số đáp án đúng không phù hợp loại câu hỏi',
-          path: ['options'],
-        });
-      if (v.matchingPairs?.length)
-        c.addIssue({
-          code: 'custom',
-          message: 'Câu trắc nghiệm không dùng matchingPairs',
-          path: ['matchingPairs'],
-        });
-    }
-  });
 @Injectable()
 export class QuestionsService {
   constructor(private db: PrismaService) {}
@@ -76,19 +31,16 @@ export class QuestionsService {
     return q;
   }
   async list(user: AuthRequest['user'], q: Record<string, string | undefined>) {
-    const page = Math.max(1, Number(q.page) || 1),
-      limit = Math.min(100, Math.max(1, Number(q.limit) || 20));
+    if (user.role !== 'TEACHER' && user.role !== 'ADMIN')
+      throw new ForbiddenException();
+    const { page, limit, search, type, difficulty, topic } =
+      filterSchema.parse(q);
     const where: Prisma.QuestionWhereInput = { archivedAt: null };
     if (user.role === 'TEACHER') where.authorId = user.id;
-    if (q.search) where.content = { contains: q.search, mode: 'insensitive' };
-    if (
-      q.type &&
-      ['SINGLE_CHOICE', 'MULTIPLE_CHOICE', 'MATCHING'].includes(q.type)
-    )
-      where.type = q.type as QuestionType;
-    if (q.difficulty && ['EASY', 'MEDIUM', 'HARD'].includes(q.difficulty))
-      where.difficulty = q.difficulty as Difficulty;
-    if (q.topic) where.topic = { contains: q.topic, mode: 'insensitive' };
+    if (search) where.content = { contains: search, mode: 'insensitive' };
+    if (type) where.type = type;
+    if (difficulty) where.difficulty = difficulty;
+    if (topic) where.topic = { contains: topic, mode: 'insensitive' };
     const [items, total] = await this.db.$transaction([
       this.db.question.findMany({
         where,

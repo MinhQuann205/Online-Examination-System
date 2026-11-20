@@ -48,6 +48,10 @@ export function AdminDashboard() {
     queryKey: ['admin-totals', 'students'],
     queryFn: () => api.users('role=STUDENT&limit=1'),
   });
+  const teachers = useQuery({
+    queryKey: ['admin-totals', 'teachers'],
+    queryFn: () => api.users('role=TEACHER&limit=1'),
+  });
   const classes = useQuery({
     queryKey: ['admin-totals', 'classes'],
     queryFn: () => api.classes('limit=1'),
@@ -69,7 +73,14 @@ export function AdminDashboard() {
       caption: 'Tài khoản học viên',
       query: students,
       Icon: GraduationCap,
-      href: '/admin/users',
+      href: '/admin/users?role=STUDENT',
+    },
+    {
+      title: 'Giảng viên',
+      caption: 'Tài khoản giảng viên',
+      query: teachers,
+      Icon: GraduationCap,
+      href: '/admin/users?role=TEACHER',
     },
     {
       title: 'Lớp học',

@@ -9,6 +9,16 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Pagination } from '@/components/pagination';
 import {
+  readStudentExamView,
+  studentExamViews,
+  type StudentExamView,
+} from '@/lib/student-exam-views';
+import {
+  deadlineGuidance,
+  readStudentOperationContext,
+} from '@/lib/examination-operations';
+import { assignmentAvailability } from '@/lib/assignment-availability';
+import {
   StudentHeading,
   SearchToolbar,
   StatusBadge,
@@ -17,22 +27,17 @@ import {
   useStudentSessionError,
   displayDate,
 } from './student/student-ui';
-function availability(item: ExamAssignment, now: number) {
-  if (!now) return 'Đang kiểm tra lịch';
-  if (
-    !item.examVersion ||
-    !item.exam.metadataAvailable ||
-    item.exam.status === 'ARCHIVED'
-  )
-    return 'Không còn khả dụng';
-  if (item.opensAt && now < Date.parse(item.opensAt)) return 'Chưa đến giờ';
-  if (item.closesAt && now >= Date.parse(item.closesAt)) return 'Đã đóng';
-  if (item._count.attempts >= item.maxAttempts) return 'Đã hết lượt làm bài';
-  return 'Đang mở';
-}
-export function StudentExams() {
-  const [page, setPage] = useState(1),
-    [search, setSearch] = useState(''),
+export function StudentExams({
+  initialView = 'all',
+  initialContext = readStudentOperationContext({}),
+}: {
+  initialView?: StudentExamView;
+  initialContext?: ReturnType<typeof readStudentOperationContext>;
+}) {
+  const [view, setView] = useState(initialView);
+  const [scheduleOrder, setOrder] = useState(initialContext.scheduleOrder);
+  const [page, setPage] = useState(initialContext.page),
+    [search, setSearch] = useState(initialContext.search),
     [now, setNow] = useState(0),
     [pending, setPending] = useState<string | null>(null),
     [error, setError] = useState<Error | null>(null),
@@ -41,10 +46,22 @@ export function StudentExams() {
     router = useRouter(),
     client = useQueryClient();
   const q = useQuery({
-    queryKey: ['exam-assignments', 'student', page, search],
+    queryKey: [
+      'exam-assignments',
+      'student',
+      page,
+      search,
+      view,
+      scheduleOrder,
+    ],
     queryFn: () =>
       api.examAssignments(
-        new URLSearchParams({ page: String(page), search }).toString(),
+        new URLSearchParams({
+          page: String(page),
+          search,
+          view,
+          scheduleOrder,
+        }).toString(),
       ),
     staleTime: 0,
     gcTime: 0,
@@ -59,6 +76,22 @@ export function StudentExams() {
       clearInterval(timer);
     };
   }, []);
+  function keepContext(
+    next: {
+      view?: StudentExamView;
+      page?: number;
+      search?: string;
+      scheduleOrder?: string;
+    } = {},
+  ) {
+    const q = new URLSearchParams({
+      view: next.view ?? view,
+      page: String(next.page ?? page),
+      search: next.search ?? search,
+      scheduleOrder: next.scheduleOrder ?? scheduleOrder,
+    });
+    window.history.replaceState(null, '', '/student/exams?' + q);
+  }
   async function enter(item: ExamAssignment, attemptId?: string) {
     if (busy.current) return;
     busy.current = true;
@@ -101,10 +134,54 @@ export function StudentExams() {
         </Link>
       </StudentHeading>
       <Card className="student-panel">
+        <label className="block mb-3">
+          Nhóm bài thi
+          <select
+            aria-label="Nhóm bài thi"
+            value={view}
+            disabled={pending !== null}
+            onChange={(e) => {
+              const next = readStudentExamView(e.target.value);
+              setView(next);
+              setPage(1);
+              setDenied(null);
+              setError(null);
+              keepContext({ view: next, page: 1 });
+            }}
+          >
+            {Object.entries(studentExamViews).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          Ưu tiên theo lịch
+          <select
+            value={scheduleOrder}
+            onChange={(e) => {
+              const order = e.target.value as typeof scheduleOrder;
+              setOrder(order);
+              setPage(1);
+              keepContext({ scheduleOrder: order, page: 1 });
+            }}
+          >
+            <option value="recent">Mới giao trước</option>
+            <option value="opening">Mở sớm trước</option>
+            <option value="closing">Đóng sớm trước</option>
+          </select>
+        </label>
+        <p className="muted">
+          Bộ lọc áp dụng trên toàn bộ bài giao của bạn, trước phân trang. Lịch
+          mở chỉ để tham khảo; máy chủ xác nhận điều kiện khi bắt đầu hoặc tiếp
+          tục.
+        </p>
         <SearchToolbar
           value={search}
           onChange={(value) => {
             setSearch(value);
+            keepContext({ search: value, page: 1 });
             setPage(1);
             setError(null);
             setDenied(null);
@@ -136,7 +213,8 @@ export function StudentExams() {
                   const attempts = item.attempts ?? [],
                     active = attempts.find((a) => a.status === 'IN_PROGRESS'),
                     last = attempts.find((a) => a.status !== 'IN_PROGRESS'),
-                    state = availability(item, now),
+                    state = assignmentAvailability(item, now),
+                    guidance = deadlineGuidance(item, q.data.serverNow),
                     remaining = Math.max(
                       0,
                       item.maxAttempts - item._count.attempts,
@@ -195,6 +273,13 @@ export function StudentExams() {
                           </dd>
                         </div>
                       </dl>
+                      {guidance && (
+                        <p className="rounded border p-3" role="note">
+                          {guidance.label}: {displayDate(guidance.at)}. Đây là
+                          hướng dẫn hiển thị; hãy làm mới và để máy chủ kiểm tra
+                          khi mở bài.
+                        </p>
+                      )}
                       <div className="student-exam-footer">
                         <div>
                           {active ? (
@@ -221,6 +306,12 @@ export function StudentExams() {
                           </p>
                         </div>
                         <div className="admin-row-actions">
+                          <Link
+                            className="admin-secondary-link"
+                            href={'/student/exams/' + item.id}
+                          >
+                            Xem chi tiết
+                          </Link>
                           {active ? (
                             <Button
                               disabled={pending !== null}
@@ -261,7 +352,10 @@ export function StudentExams() {
               page={page}
               total={q.data.total}
               pageCount={q.data.pageCount}
-              onPage={setPage}
+              onPage={(page) => {
+                setPage(page);
+                keepContext({ page });
+              }}
               busy={q.isFetching || pending !== null}
             />
           </>

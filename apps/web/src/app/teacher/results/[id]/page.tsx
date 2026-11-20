@@ -1,10 +1,17 @@
 import { TeacherResultDetail } from '@/components/student-results';
-
-export default async function TeacherResultDetailPage({
+import { reportReturnHref } from '@/lib/academic-navigation';
+export default async function Page({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { id } = await params;
-  return <TeacherResultDetail attemptId={id} />;
+  return (
+    <TeacherResultDetail
+      attemptId={id}
+      returnHref={reportReturnHref('teacher', await searchParams)}
+    />
+  );
 }

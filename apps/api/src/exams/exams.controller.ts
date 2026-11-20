@@ -36,8 +36,9 @@ export class ExamsController {
   get(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Req() request: AuthRequest,
+    @Query() query: Record<string, string> = {},
   ) {
-    return this.exams.get(id, request.user);
+    return this.exams.get(id, request.user, query);
   }
 
   @Patch(':id')
@@ -54,16 +55,20 @@ export class ExamsController {
   preview(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Req() request: AuthRequest,
+    @Query() query: Record<string, string>,
   ) {
-    return this.exams.preview(id, request.user);
+    return this.exams.preview(id, request.user, query);
   }
 
   @Get(':id/versions')
   versions(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Req() request: AuthRequest,
+    @Query() query: Record<string, string> = {},
   ) {
-    return this.exams.versions(id, request.user);
+    return Object.keys(query).length
+      ? this.exams.versionsPage(id, request.user, query)
+      : this.exams.versions(id, request.user);
   }
 
   @Post(':id/publish')

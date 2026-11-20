@@ -1,4 +1,13 @@
 'use client';
+import { prepareClass } from '@/lib/authoring-validation';
+import Link from 'next/link';
+import { ClassRoster } from '@/components/class-roster';
+import {
+  readMemberFilters,
+  memberHref,
+  type MemberFilters,
+} from '@/lib/management-page-state';
+import { managementHref } from '@/lib/management-links';
 import { BackButton } from '@/components/back-navigation';
 import { useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -9,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { Pagination } from '@/components/pagination';
+import { ClassArchiveAction } from '@/components/class-archive-action';
 import {
   AdminPageHeader,
   ConfirmationDialog,
@@ -20,7 +30,6 @@ import {
   useAdminAction,
 } from './admin-ui';
 import {
-  loadClass,
   loadClasses,
   loadUsers,
   type AdminClass,
@@ -34,16 +43,27 @@ const useTeachers = () =>
         loadUsers(`role=TEACHER&active=true&limit=100&page=${page}`),
       ),
   });
-export function AdminClasses() {
+export function AdminClasses({
+  initialClassId = '',
+  initialRosterFilters = readMemberFilters({}),
+}: {
+  initialClassId?: string;
+  initialRosterFilters?: MemberFilters;
+}) {
   const [search, setSearch] = useState(''),
+    [archived, setArchived] = useState('false'),
     [page, setPage] = useState(1),
-    [selected, setSelected] = useState(''),
+    [selected, setSelected] = useState(initialClassId),
     [notice, setNotice] = useState('');
   const query = useQuery({
-    queryKey: ['admin-classes', search, page],
+    queryKey: ['admin-classes', search, archived, page],
     queryFn: () =>
       loadClasses(
-        new URLSearchParams({ search, page: String(page) }).toString(),
+        new URLSearchParams({
+          search,
+          archived,
+          page: String(page),
+        }).toString(),
       ),
   });
   const cache = useQueryClient();
@@ -80,7 +100,11 @@ export function AdminClasses() {
       <Card className="admin-section">
         <div className="admin-section-title">
           <h2>Danh sách lớp học</h2>
-          <span className="muted">Lớp chưa lưu trữ</span>
+          <span className="muted">
+            {query.data && !query.isError
+              ? `${query.data.total} lớp học`
+              : 'Tra cứu lớp học'}
+          </span>
         </div>
         <SearchToolbar
           value={search}
@@ -88,7 +112,24 @@ export function AdminClasses() {
             setSearch(value);
             setPage(1);
           }}
-        />
+        >
+          <label>
+            Trạng thái lớp
+            <select
+              aria-label="Trạng thái lớp"
+              value={archived}
+              onChange={(event) => {
+                setArchived(event.target.value);
+                setPage(1);
+                setSelected('');
+              }}
+            >
+              <option value="false">Chưa lưu trữ</option>
+              <option value="true">Đã lưu trữ</option>
+              <option value="all">Tất cả lớp</option>
+            </select>
+          </label>
+        </SearchToolbar>
         {query.isPending ? (
           <p role="status">Đang tải danh sách lớp học...</p>
         ) : query.isError ? (
@@ -104,6 +145,7 @@ export function AdminClasses() {
                 <th scope="col">Lớp học</th>
                 <th scope="col">Giảng viên phụ trách</th>
                 <th scope="col">Học viên</th>
+                <th scope="col">Trạng thái</th>
                 <th scope="col">Thao tác</th>
               </tr>
             </thead>
@@ -122,10 +164,22 @@ export function AdminClasses() {
                   </td>
                   <td>{item._count?.members ?? 0}</td>
                   <td>
+                    <StatusBadge tone={item.isArchived ? 'neutral' : 'success'}>
+                      {item.isArchived ? 'Đã lưu trữ' : 'Đang hoạt động'}
+                    </StatusBadge>
+                  </td>
+                  <td>
                     <Button
                       variant="outline"
                       type="button"
-                      onClick={() => setSelected(item.id)}
+                      onClick={() => {
+                        setSelected(item.id);
+                        window.history.replaceState(
+                          null,
+                          '',
+                          memberHref('admin', item.id, initialRosterFilters),
+                        );
+                      }}
                     >
                       Quản lý {item.name}
                     </Button>
@@ -146,7 +200,14 @@ export function AdminClasses() {
         )}
       </Card>
       {selected && (
-        <ClassDetails id={selected} onClose={() => setSelected('')} />
+        <ClassDetails
+          initialRosterFilters={initialRosterFilters}
+          id={selected}
+          onClose={() => {
+            setSelected('');
+            window.history.replaceState(null, '', '/admin/classes');
+          }}
+        />
       )}
     </>
   );
@@ -196,7 +257,9 @@ function CreateClass({ onSaved }: { onSaved: () => Promise<void> }) {
   async function submit(event: FormEvent) {
     event.preventDefault();
     await action.run(async () => {
-      await api.createClass({ name, code, description, teacherId: teacher });
+      await api.createClass(
+        prepareClass({ name, code, description, teacherId: teacher }, true),
+      );
       setName('');
       setCode('');
       setDescription('');
@@ -262,10 +325,18 @@ function CreateClass({ onSaved }: { onSaved: () => Promise<void> }) {
     </form>
   );
 }
-function ClassDetails({ id, onClose }: { id: string; onClose: () => void }) {
+function ClassDetails({
+  id,
+  onClose,
+  initialRosterFilters,
+}: {
+  id: string;
+  onClose: () => void;
+  initialRosterFilters: MemberFilters;
+}) {
   const query = useQuery({
     queryKey: ['admin-class', id],
-    queryFn: () => loadClass(id),
+    queryFn: async () => (await api.classOverview(id)) as AdminClass,
   });
   return (
     <Card className="admin-section" aria-label="Chi tiết quản lý">
@@ -277,7 +348,11 @@ function ClassDetails({ id, onClose }: { id: string; onClose: () => void }) {
       ) : query.isError ? (
         <ErrorState error={query.error} retry={() => void query.refetch()} />
       ) : (
-        <ClassEditor key={id} item={query.data} />
+        <ClassEditor
+          key={id}
+          item={query.data}
+          initialRosterFilters={initialRosterFilters}
+        />
       )}
       <div className="contextual-back">
         <BackButton onClick={onClose} label="Quay lại danh sách lớp học" />
@@ -285,7 +360,13 @@ function ClassDetails({ id, onClose }: { id: string; onClose: () => void }) {
     </Card>
   );
 }
-function ClassEditor({ item }: { item: AdminClass }) {
+function ClassEditor({
+  item,
+  initialRosterFilters,
+}: {
+  item: AdminClass;
+  initialRosterFilters: MemberFilters;
+}) {
   const cache = useQueryClient(),
     teachers = useTeachers(),
     action = useAdminAction();
@@ -298,15 +379,21 @@ function ClassEditor({ item }: { item: AdminClass }) {
       'reassign' | { id: string; name: string } | null
     >(null);
   async function save() {
-    await api.updateClass(item.id, { name, description, teacherId: teacher });
+    await api.updateClass(
+      item.id,
+      prepareClass({ name, description, teacherId: teacher }),
+    );
     setEditing(false);
     setNotice('Đã lưu thay đổi.');
     await cache.invalidateQueries();
   }
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (teacher !== item.teacherId) setConfirm('reassign');
-    else await action.run(save);
+    await action.run(async () => {
+      prepareClass({ name, description, teacherId: teacher });
+      if (teacher !== item.teacherId) setConfirm('reassign');
+      else await save();
+    });
   }
   return (
     <>
@@ -319,13 +406,25 @@ function ClassEditor({ item }: { item: AdminClass }) {
         </div>
         <div>
           <dt>Giảng viên phụ trách</dt>
-          <dd>{item.teacher.fullName}</dd>
+          <dd>
+            <Link
+              className="admin-secondary-link"
+              href={managementHref('users', item.teacherId)}
+            >
+              {item.teacher.fullName}
+            </Link>
+          </dd>
         </div>
         <div>
           <dt>Mô tả lớp</dt>
           <dd>{item.description || 'Chưa có mô tả.'}</dd>
         </div>
       </dl>
+      <ClassArchiveAction
+        id={item.id}
+        name={item.name}
+        archived={item.isArchived}
+      />
       <Button
         variant="outline"
         type="button"
@@ -397,43 +496,12 @@ function ClassEditor({ item }: { item: AdminClass }) {
             await cache.invalidateQueries();
           }}
         />
-        {!item.members?.length ? (
-          <EmptyState title="Lớp chưa có học viên.">
-            Tìm và chọn học viên để thêm vào lớp.
-          </EmptyState>
-        ) : (
-          <DataTable label="Thành viên lớp">
-            <thead>
-              <tr>
-                <th scope="col">Học viên</th>
-                <th scope="col">Email</th>
-                <th scope="col">Thao tác</th>
-              </tr>
-            </thead>
-            <tbody>
-              {item.members.map((member) => (
-                <tr key={member.id}>
-                  <th scope="row">{member.student.fullName}</th>
-                  <td>{member.student.email}</td>
-                  <td>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      onClick={() =>
-                        setConfirm({
-                          id: member.studentId,
-                          name: member.student.fullName,
-                        })
-                      }
-                    >
-                      Xóa
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </DataTable>
-        )}
+        <ClassRoster
+          classId={item.id}
+          role="admin"
+          initialFilters={initialRosterFilters}
+          onRemove={(id, name) => setConfirm({ id, name })}
+        />
       </section>
       {confirm && (
         <ConfirmationDialog

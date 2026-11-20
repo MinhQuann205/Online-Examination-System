@@ -1,58 +1,62 @@
-# Thiết kế cơ sở dữ liệu
+# Dữ liệu ExamSpace
 
-Prisma schema nằm ở `apps/api/prisma/schema.prisma`, migration SQL đầu tiên ở `apps/api/prisma/migrations/20261022000000_init`. PostgreSQL dùng UUID cho khóa chính, khóa ngoại có chỉ mục phù hợp, các bảng nội dung có `createdAt`/`updatedAt` (riêng `ClassMember` có thêm `joinedAt`). Migration thêm CHECK cho đích giao bài, thời gian, số lượt, thời lượng và điểm mỗi câu.
+Schema nằm ở `apps/api/prisma/schema.prisma`, migrations ở `apps/api/prisma/migrations/`. Database sử dụng PostgreSQL 16; API truy cập qua Prisma ORM và PostgreSQL driver adapter.
 
-| Nhóm                | Bảng                                             | Quan hệ chính                                                                                      |
-| ------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| Tài khoản           | `User`, `Class`, `ClassMember`                   | Giáo viên dạy lớp; học viên tham gia lớp với unique `(classId, studentId)`                         |
-| Ngân hàng câu hỏi   | `Question`, `QuestionOption`, `MatchingPair`     | Một câu có lựa chọn hoặc cặp ghép; loại câu xác định bằng enum                                     |
-| Đề thi              | `Exam`, `ExamQuestion`                           | `(examId, version, position)` là duy nhất; mỗi câu chứa `questionSnapshot` và điểm                 |
-| Giao bài và kết quả | `ExamAssignment`, `ExamAttempt`, `AttemptAnswer` | Giao cho đúng một lớp hoặc học viên; mỗi lần làm lưu `examVersion`, `examSnapshot`, đáp án và điểm |
+## Các model
 
-Đề thi đã phát hành phải tạo version mới khi chỉnh sửa. Khi bắt đầu lượt làm, service Phase 2 sẽ sao chép nội dung version vào `ExamAttempt.examSnapshot`; khi chấm, dùng snapshot đó thay vì câu hỏi hiện tại. Nhờ vậy lịch sử không thay đổi khi ngân hàng câu hỏi được sửa. Chưa có API tạo/sửa đề hoặc chấm điểm trong Phase 1.
+| Model            | Dữ liệu và quan hệ chính                                                                                                   |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `User`           | Tài khoản, role, trạng thái, password/refresh hash và tokenVersion; liên kết lớp, nội dung do Teacher soạn và các lượt làm |
+| `Class`          | Tên, mã unique, Teacher phụ trách và trạng thái lưu trữ                                                                    |
+| `ClassMember`    | Quan hệ Class–Student; unique `(classId, studentId)`                                                                       |
+| `Question`       | Tác giả, loại câu, nội dung, độ khó, chủ đề, giải thích và trạng thái lưu trữ                                              |
+| `QuestionOption` | Các lựa chọn và key đúng của câu trắc nghiệm                                                                               |
+| `MatchingPair`   | Các cặp trái/phải đúng của câu ghép nối                                                                                    |
+| `Exam`           | Đề hiện tại: tác giả, metadata, trạng thái, thời lượng và số phiên bản                                                     |
+| `ExamQuestion`   | Cấu hình câu của đề: version, thứ tự, điểm và question snapshot                                                            |
+| `ExamVersion`    | Phiên bản đã phát hành, số version, snapshot và thời điểm publish                                                          |
+| `ExamAssignment` | Đề/phiên bản được giao, lớp hoặc Student nhận, người giao, lịch, quota và policy kết quả                                   |
+| `ExamAttempt`    | Lượt làm của Student, assignment/version, snapshot, deadline, review flags, trạng thái và điểm                             |
+| `AttemptAnswer`  | Answer JSON, revision và điểm từng câu; unique `(attemptId, questionId)`                                                   |
 
-Các bất biến xuyên bảng như “giáo viên của lớp”, “người nhận giao bài là học viên” và “đáp án thuộc snapshot” sẽ được kiểm tra trong service và transaction ở Phase 2. Prisma không biểu diễn được hết các CHECK trong schema; giữ nguyên chúng trong migration SQL.
+Không có bảng Result riêng. API dựng kết quả từ `ExamAttempt`, `AttemptAnswer`, snapshot và policy của bài giao.
 
-Phase 2 bổ sung enum `Difficulty` và các trường `Question.difficulty`, `Question.topic`, `Question.archivedAt`, `Class.isArchived` trong migration `20261023000000_management_fields`. Migration chỉ thêm cột/index với default an toàn, không xóa dữ liệu hiện có.
+## Quan hệ và ràng buộc
 
-## Schema Phase 3 hiện tại
+Teacher phụ trách nhiều lớp và soạn nhiều câu/đề. Student tham gia lớp qua `ClassMember`. Một đề có nhiều câu cấu hình, nhiều phiên bản đã phát hành và nhiều bài giao; mỗi bài giao có các lượt làm, mỗi lượt có các câu trả lời.
 
-Các đoạn mô tả Phase 1 ở trên là bối cảnh lịch sử; service tạo đề/làm/chấm hiện đã có trong Phase 3, không thuộc Phase 2.
+Khóa chính dùng UUID. Các unique constraint bảo vệ email, mã lớp, membership, số version và thứ tự câu. `ExamQuestion.points`, score/maxScore và awarded sử dụng `Decimal(8,2)`.
 
-| Model                                    | Dữ liệu và quan hệ hiện tại                                                                                                                                                                   |
-| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| User                                     | UUID, email unique, role/isActive, Argon2 passwordHash/refreshTokenHash, tokenVersion; không trả các trường hash trong JSON                                                                   |
-| Class / ClassMember                      | teacherId FK User; code unique; membership unique classId/studentId; xóa membership không cascade xóa attempt                                                                                 |
-| Question / QuestionOption / MatchingPair | FK author/question, nội dung ba loại, difficulty/topic/archive; lựa chọn/cặp có unique questionId/position                                                                                    |
-| Exam                                     | FK author; nháp hiện tại, version number/status/duration; index authorId/status                                                                                                               |
-| ExamVersion                              | FK Exam onDelete Restrict; number, snapshot JSON và publishedAt; unique examId/number; index examId/publishedAt                                                                               |
-| ExamQuestion                             | FK Exam/Question; version/position/points Decimal(8,2)/questionSnapshot; unique examId/version/position và examId/version/questionId                                                          |
-| ExamAssignment                           | FK Exam, nullable ExamVersion, Class hoặc Student và createdBy User; opensAt/closesAt, maxAttempts, showScore/showAnswers                                                                     |
-| ExamAttempt                              | FK Exam/Assignment/Student, nullable ExamVersion; examVersion number, examSnapshot JSON, startedAt/deadlineAt/submittedAt/status, Decimal score/maxScore, reviewQuestionIds UUID[] default [] |
-| AttemptAnswer                            | FK attempt onDelete Cascade; questionId thuộc snapshot (kiểm service, không FK ngân hàng); answer JSON, awarded Decimal, revision Int default 0; unique attemptId/questionId                  |
+Migration SQL còn có CHECK cho thời lượng dương, điểm câu dương, maxAttempts dương, lịch đóng sau lịch mở khi cả hai được đặt, và đúng một người nhận giữa classId/studentId. Vai trò, ownership, quyền thành viên, payload thuộc snapshot và revision được kiểm thêm tại service/transaction; không thể suy các điều kiện này chỉ từ FK.
 
-FK version nullable tương thích dữ liệu cũ, không cho phép service start assignment thiếu pin: trả 400 và cần review version đúng, không gán latest. Snapshot đã publish/lượt thi là nguồn chấm; sửa ngân hàng/nháp không thay lịch sử. Deadline legacy null được suy ra/persist dưới transaction và lock. Review flags độc lập answer, revision và điểm.
+`AttemptAnswer.questionId` là UUID thuộc snapshot, không phải FK tới câu hỏi ngân hàng đang chỉnh sửa. `examVersionId` ở assignment/attempt nullable để tương thích dữ liệu cũ; luồng giao/bắt đầu mới yêu cầu version hợp lệ và không tự thay bằng latest khi thiếu hoặc sai pin.
 
-### Index và CHECK
+## Snapshot, điểm và lịch sử
 
-Ngoài unique/PK, schema có: User(role,isActive); Class(teacherId), (isArchived,teacherId); ClassMember(studentId); Question(authorId,type), (authorId,archivedAt,difficulty), (topic); QuestionOption(questionId,isCorrect); Exam(authorId,status); ExamVersion(examId,publishedAt); ExamQuestion(questionId); Assignment(examId), (classId,opensAt), (studentId,opensAt), (examVersionId); Attempt(studentId,startedAt), (examId,status), (assignmentId,studentId), (status,deadlineAt). Các unique QuestionOption/MatchingPair(questionId,position) hỗ trợ thứ tự.
+Publish tạo `ExamVersion.snapshot`. Khi bắt đầu, hệ thống lưu `ExamAttempt.examSnapshot` cùng version và deadline. Sau đó việc sửa câu hỏi hay tạo đề mới không thay căn cứ chấm của lượt cũ.
 
-SQL migration giữ năm CHECK: durationMin > 0; points > 0; assignment đúng một đích classId/studentId; opensAt < closesAt khi cả hai có giá trị; maxAttempts > 0. Prisma validate/status không chứng minh CHECK/index thực tế: cần inspect PostgreSQL và migrate diff. Các quy tắc owner/role/answer thuộc snapshot, tập đáp án, lịch khi đang làm và revision được service kiểm trong transaction.
+Answer được lưu với revision để phát hiện ghi đè/xung đột. Review flags lưu riêng, không tăng answer revision và không ảnh hưởng điểm. Khi submit hoặc hết hạn, server khóa hàng lượt làm, chấm snapshot và commit trạng thái/điểm cùng nhau.
 
-### Lịch sử và quyền
+Xóa membership không xóa attempt lịch sử. Membership hiện tại ảnh hưởng quyền list/start và scope Teacher; Student vẫn chỉ đọc lượt/kết quả thuộc mình theo contract. Điểm chưa công bố khác với điểm 0; đáp án đúng chỉ được trả theo policy cho phép.
 
-Assignment lớp dùng membership hiện tại cho list/start. Báo cáo hợp roster với Student có attempt hoàn thành, giữ người đã rời lớp/khóa. Teacher hiện phụ trách lớp có quyền lịch sử; tác giả đề không mặc nhiên đọc kết quả lớp khác. Direct assignment cần Teacher là người giao và đang quản lý Student. Admin toàn hệ thống, Student chỉ của mình; chính sách công bố hiện tại chi phối score/answer key.
+## Migrations
 
-## Migration và triển khai
+| Thứ tự | Migration                             | Nội dung                                 |
+| ------ | ------------------------------------- | ---------------------------------------- |
+| 1      | `20261022000000_init`                 | Bảng, quan hệ và các ràng buộc ban đầu   |
+| 2      | `20261023000000_management_fields`    | Độ khó/chủ đề/lưu trữ và indexes quản lý |
+| 3      | `20261024000000_exam_versions`        | ExamVersion, pin version và deadline     |
+| 4      | `20261029000000_phase3_p1_review`     | Index lịch sử ExamVersion                |
+| 5      | `20261029001000_attempt_review_flags` | Mảng UUID đánh dấu câu xem lại           |
 
-| Thứ tự | Migration                           | Development xác minh 30/10/2026 | Test       |
-| ------ | ----------------------------------- | ------------------------------- | ---------- |
-| 1      | 20261022000000_init                 | Đã áp dụng                      | Đã áp dụng |
-| 2      | 20261023000000_management_fields    | Đã áp dụng                      | Đã áp dụng |
-| 3      | 20261024000000_exam_versions        | Đã áp dụng                      | Đã áp dụng |
-| 4      | 20261029000000_phase3_p1_review     | Đã áp dụng                      | Đã áp dụng |
-| 5      | 20261029001000_attempt_review_flags | Đã áp dụng                      | Đã áp dụng |
+Đây là danh sách migration trong source, không phải xác nhận database của người đọc đã áp dụng đủ.
 
-Migration 4 chỉ CREATE INDEX thường, có thể chặn ghi trên ExamVersion trong lúc tạo; cần maintenance window nếu bảng lớn. Migration 5 ADD COLUMN UUID[] NOT NULL với constant default rỗng, PostgreSQL 16 hỗ trợ fast default nhưng vẫn cần ACCESS EXCLUSIVE lock ngắn; chờ transaction dài có thể kéo dài downtime. Không thay score/key/snapshot/answer hoặc sửa lịch sử migration. Client P1 đọc cột mới nên database phải migrate trước chạy binary mới.
+### Cài mới và cập nhật
 
-Development cổng 5432 không dùng làm fixtures. Test harness chỉ nhận tên online_exam_phase3_test, loopback và cổng test cấu hình tường minh khác 5432; kiểm SQL database/cluster system identifier khác development trước mọi truy cập. Test migration dùng DB prefix riêng trên cùng server đã xác minh. Xem cấu hình trong [README](../README.md). Migrate status đủ năm chưa đủ chứng minh đồng bộ; migrate diff test cần exit 0. Xem [kế hoạch backup/deploy/recovery](PHASE3_DEV_MIGRATION_PLAN.md); không reset hoặc db push. Trên máy khác cần kiểm trạng thái riêng và backup database có dữ liệu trước triển khai.
+Từ root, `corepack pnpm db:generate` sinh Client cục bộ; không áp schema hoặc ghi dữ liệu. Prisma config đang đọc `DATABASE_URL`, vì vậy cần cấu hình `.env` theo README trước khi generate. Client được ignore và không commit.
+
+Kiểm database đích bằng `corepack pnpm --filter @exam/api exec prisma migrate status`. Chỉ chạy `corepack pnpm db:migrate` sau khi xác nhận đúng instance và phần pending; root script gọi `prisma migrate deploy`. Không sửa migration cũ, checksum hoặc `_prisma_migrations` để ép thành công.
+
+Với database có dữ liệu, cần backup ngoài Git và thử restore vào database mới cách ly trước khi triển khai. SQL thêm index/cột có thể chờ hoặc giữ lock, nên xem transaction dài và thời gian bảo trì. Sau deploy, kiểm migration history, schema/indexes và ứng dụng trên đúng môi trường. Không dùng reset/db push hoặc restore đè dữ liệu hiện có để xử lý lỗi.
+
+Database test phải là instance riêng với development; guard kiểm tên, host/port và cluster identity trước fixtures. Xem [README](../README.md) để cài đặt và [TESTING](TESTING.md) để chạy tests.

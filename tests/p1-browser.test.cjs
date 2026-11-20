@@ -1,3 +1,4 @@
+const { clickWebAction } = require('./web-confirmation.cjs');
 const { test, before, after } = require('node:test');
 const { createRequire } = require('node:module');
 const path = require('node:path');
@@ -374,7 +375,7 @@ test('F14/F10: reorder 3 to first, change total, reload, publish and assign expl
     const published = x.page.waitForResponse(
       (r) => r.url().endsWith('/publish') && r.request().method() === 'POST',
     );
-    await x.page.getByRole('button', { name: 'Xuất bản', exact: true }).click();
+    await clickWebAction(x.page, 'Xuất bản');
     version = await (await published).json();
     assert.deepEqual(
       version.snapshot.questions.map((q) => q.questionId),
@@ -402,7 +403,7 @@ test('F14/F10: reorder 3 to first, change total, reload, publish and assign expl
         r.url() === api + '/exam-assignments' &&
         r.request().method() === 'POST',
     );
-    await x.page.getByRole('button', { name: 'Giao bài', exact: true }).click();
+    await clickWebAction(x.page, 'Giao bài');
     const asg = await (await assigned).json();
     assert.equal(asg.examVersion.id, version.id);
     const a = await start(f, asg);

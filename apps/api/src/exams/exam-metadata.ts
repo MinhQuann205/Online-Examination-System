@@ -17,3 +17,11 @@ export function historicalExamMetadata(snapshot: unknown) {
         metadataAvailable: false,
       };
 }
+
+// Assignment details may show this public field, never the private question/key tree.
+export function historicalExamDescription(snapshot: unknown): string | null {
+  const parsed = z
+    .object({ description: z.string().max(5000).nullable().optional() })
+    .safeParse(snapshot);
+  return parsed.success ? (parsed.data.description ?? null) : null;
+}

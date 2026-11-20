@@ -4,9 +4,33 @@ export { StudentResultsIndex as StudentResults } from './student/student-results
 export function StudentResultDetail({ attemptId }: { attemptId: string }) {
   return <ResultDetailView attemptId={attemptId} requiredRole="STUDENT" />;
 }
-export function TeacherResultDetail({ attemptId }: { attemptId: string }) {
-  return <ResultDetailView attemptId={attemptId} requiredRole="TEACHER" />;
+export function TeacherResultDetail({
+  attemptId,
+  returnHref,
+}: {
+  attemptId: string;
+  returnHref?: string;
+}) {
+  return (
+    <ResultDetailView
+      attemptId={attemptId}
+      requiredRole="TEACHER"
+      returnHref={returnHref}
+    />
+  );
 }
-export function AdminResultDetail({ attemptId }: { attemptId: string }) {
-  return <ResultDetailView attemptId={attemptId} requiredRole="ADMIN" />;
+export function AdminResultDetail({
+  attemptId,
+  returnHref,
+}: {
+  attemptId: string;
+  returnHref?: string;
+}) {
+  return (
+    <ResultDetailView
+      attemptId={attemptId}
+      requiredRole="ADMIN"
+      returnHref={returnHref}
+    />
+  );
 }

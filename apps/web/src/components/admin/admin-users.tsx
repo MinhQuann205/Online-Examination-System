@@ -1,4 +1,7 @@
 'use client';
+import { prepareNewUser, prepareUserProfile } from '@/lib/authoring-validation';
+import Link from 'next/link';
+import { managementHref } from '@/lib/management-links';
 import { BackButton } from '@/components/back-navigation';
 import { useCallback, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -20,14 +23,35 @@ import {
   useAdminAction,
 } from './admin-ui';
 import { loadUser, loadUsers, roleLabel, type AdminUser } from './admin-data';
+import {
+  adminUsersHref,
+  readAdminUsersFilters,
+  type AdminUsersFilters,
+} from '@/lib/admin-users-query';
 
-export function AdminUsers() {
+export function AdminUsers({
+  initialFilters = { search: '', role: '', active: '', page: 1 },
+  initialUserId = '',
+}: {
+  initialFilters?: AdminUsersFilters;
+  initialUserId?: string;
+}) {
   const cache = useQueryClient();
-  const [search, setSearch] = useState(''),
-    [role, setRole] = useState(''),
-    [active, setActive] = useState(''),
-    [page, setPage] = useState(1),
-    [selected, setSelected] = useState(''),
+  const [filters, setFilters] = useState(initialFilters);
+  const { search, role, active, page } = filters;
+  function updateFilters(patch: {
+    search?: string;
+    role?: string;
+    active?: string;
+    page?: number;
+  }) {
+    const value = { ...filters, ...patch };
+    const next = readAdminUsersFilters({ ...value, page: String(value.page) });
+    setFilters(next);
+    // Replace this list entry; typing/filtering must not add Back entries or store private data.
+    window.history.replaceState(null, '', adminUsersHref(next));
+  }
+  const [selected, setSelected] = useState(initialUserId),
     [notice, setNotice] = useState(''),
     [secret, setSecret] = useState('');
   const [confirmation, setConfirmation] = useState<{
@@ -107,8 +131,7 @@ export function AdminUsers() {
         <SearchToolbar
           value={search}
           onChange={(value) => {
-            setSearch(value);
-            setPage(1);
+            updateFilters({ search: value, page: 1 });
           }}
         >
           <label>
@@ -117,8 +140,7 @@ export function AdminUsers() {
               aria-label="Vai trò"
               value={role}
               onChange={(event) => {
-                setRole(event.target.value);
-                setPage(1);
+                updateFilters({ role: event.target.value, page: 1 });
               }}
             >
               <option value="">Tất cả vai trò</option>
@@ -133,8 +155,7 @@ export function AdminUsers() {
               aria-label="Trạng thái"
               value={active}
               onChange={(event) => {
-                setActive(event.target.value);
-                setPage(1);
+                updateFilters({ active: event.target.value, page: 1 });
               }}
             >
               <option value="">Tất cả trạng thái</option>
@@ -217,13 +238,19 @@ export function AdminUsers() {
             page={page}
             total={query.data.total}
             pageCount={query.data.pageCount}
-            onPage={setPage}
+            onPage={(page) => updateFilters({ page })}
             busy={query.isFetching}
           />
         )}
       </Card>
       {selected && (
-        <UserDetails id={selected} onClose={() => setSelected('')} />
+        <UserDetails
+          id={selected}
+          onClose={() => {
+            setSelected('');
+            window.history.replaceState(null, '', adminUsersHref(filters));
+          }}
+        />
       )}
       {confirmation && (
         <ConfirmationDialog
@@ -258,7 +285,9 @@ function CreateUser({ onSaved }: { onSaved: () => Promise<void> }) {
     event.preventDefault();
     await action.run(async () => {
       try {
-        await api.createUser({ email, fullName, role, password });
+        await api.createUser(
+          prepareNewUser({ email, fullName, role, password }),
+        );
       } finally {
         setPassword('');
       }
@@ -362,7 +391,10 @@ function UserEditor({ user }: { user: AdminUser }) {
   async function submit(event: FormEvent) {
     event.preventDefault();
     await action.run(async () => {
-      await api.updateUser(user.id, { fullName: name, email });
+      await api.updateUser(
+        user.id,
+        prepareUserProfile({ fullName: name, email }),
+      );
       setSaved(true);
       setEditing(false);
       await cache.invalidateQueries();
@@ -435,7 +467,12 @@ function UserEditor({ user }: { user: AdminUser }) {
           <ul>
             {user.memberships.map((member) => (
               <li key={member.classId}>
-                {member.class.name} · {member.class.code}
+                <Link
+                  className="admin-secondary-link"
+                  href={managementHref('classes', member.classId)}
+                >
+                  {member.class.name} · {member.class.code}
+                </Link>
               </li>
             ))}
           </ul>
